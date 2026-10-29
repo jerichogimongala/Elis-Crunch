@@ -4,44 +4,44 @@
   const KEYS = {
     products: "elisCrunch.products",
     cart: "elisCrunch.cart",
-    orders: "elisCrunch.orders",
     settings: "elisCrunch.settings",
-    admin: "elisCrunch.admin",
-    seen: "elisCrunch.seenOrders",
-    lastOrder: "elisCrunch.lastOrder",
-    notes: "elisCrunch.cartNotes",
-    gcashDrafts: "elisCrunch.gcashDrafts"
   };
   const DEFAULT_SETTINGS = {
     businessName: "Eli's Crunch",
     tagline: "Little Chef, Big Smiles",
     hours: "8 AM – 9 PM (sample hours; not confirmed)",
     address: "Nabunturan, Davao de Oro",
+    deliveryAreas: "",
     facebook: "",
     phone: "",
+    messengerUrl: "",
     deliveryEnabled: true,
     pickupEnabled: true,
     minimumOrder: 0,
-    deliveryFee: 30,
-    freeDeliveryThreshold: 0
+    deliveryFee: null,
+    deliveryFeeConfirmed: false,
+    freeDeliveryThreshold: 0,
+    gcashEnabled: true,
+    codEnabled: true,
+    cashOnPickupEnabled: true,
+    codScheduledEnabled: false,
+    scheduledOrdersEnabled: true,
+    maxScheduleDays: 7,
+    businessOpenTime: "08:00",
+    businessCloseTime: "21:00"
   };
-  const BUSINESS_HOURS = { open: "08:00", close: "21:00" };
   const SCHEDULE_INTERVAL_MINUTES = 30;
-  const SCHEDULE_DAYS_AHEAD = 7;
-  const GCASH_SETTINGS = { requireSenderName: true };
-  const GCASH_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
-  const STATUSES = ["Awaiting Payment", "Payment Verification", "Payment Rejected", "Scheduled", "New", "Confirmed", "Preparing", "Ready", "Out for Delivery", "Delivered", "Cancelled"];
-  const PAYMENT_STATUSES = ["Demo Review Pending", "Demo Review Complete", "Demo Review Rejected"];
+  const LEGACY_ORDER_KEYS = ["elisCrunch.orders", "elisCrunch.gcashDrafts", "elisCrunch.lastOrder", "elisCrunch.seenOrders", "elisCrunch.admin", "elisCrunch.checkoutDraft", "elisCrunch.cartNotes"];
   const app = document.getElementById("app");
   let toastTimer;
   let activeCategory = "All";
   let detailQuantity = 1;
+  let cartNotes = {};
   let checkoutErrors = {};
-  let orderSearchResult = "";
-  let paymentModal = null;
-  let gcashScreenshotPreviewUrl = "";
-  let gcashScreenshotFile = null;
-  let gcashScreenshotDraftId = "";
+  let checkoutDraft = {};
+  let messengerResult = null;
+  let messengerRequestPending = false;
+  let renderedPath = null;
 
   function read(key, fallback) {
     try {
@@ -100,29 +100,34 @@
   function saveProducts(value) { return write(KEYS.products, value); }
   function cart() { return read(KEYS.cart, {}); }
   function saveCart(value) { return write(KEYS.cart, value); }
-  function orders() {
-    const saved = read(KEYS.orders, []);
-    if (!Array.isArray(saved)) return [];
-    let updated = false;
-    const normalized = saved.map(order => {
-      const status = {
-        "Pending Verification": "Demo Review Pending",
-        "Verified": "Demo Review Complete",
-        "Rejected": "Demo Review Rejected"
-      }[order.paymentStatus];
-      if (!status) return order;
-      updated = true;
-      return { ...order, paymentStatus: status };
-    });
-    if (updated) write(KEYS.orders, normalized);
-    return normalized;
+  function settings() {
+    const saved = read(KEYS.settings, {});
+    const candidate = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+    const merged = { ...DEFAULT_SETTINGS, ...candidate };
+    if (!Number.isFinite(Number(merged.minimumOrder)) || Number(merged.minimumOrder) < 0) merged.minimumOrder = 0;
+    if (merged.deliveryFee === "" || merged.deliveryFee === undefined || merged.deliveryFee === null || !Number.isFinite(Number(merged.deliveryFee)) || Number(merged.deliveryFee) < 0) merged.deliveryFee = null;
+    else merged.deliveryFee = Number(merged.deliveryFee);
+    if (!Number.isFinite(Number(merged.freeDeliveryThreshold)) || Number(merged.freeDeliveryThreshold) < 0) merged.freeDeliveryThreshold = 0;
+    if (!Number.isInteger(Number(merged.maxScheduleDays)) || Number(merged.maxScheduleDays) < 1 || Number(merged.maxScheduleDays) > 30) merged.maxScheduleDays = DEFAULT_SETTINGS.maxScheduleDays;
+    if (!validClockTime(merged.businessOpenTime) || !validClockTime(merged.businessCloseTime) || clockMinutes(merged.businessOpenTime) >= clockMinutes(merged.businessCloseTime)) {
+      merged.businessOpenTime = DEFAULT_SETTINGS.businessOpenTime;
+      merged.businessCloseTime = DEFAULT_SETTINGS.businessCloseTime;
+    }
+    for (const key of ["deliveryEnabled", "pickupEnabled", "deliveryFeeConfirmed", "gcashEnabled", "codEnabled", "cashOnPickupEnabled", "codScheduledEnabled", "scheduledOrdersEnabled"]) {
+      if (typeof merged[key] !== "boolean") merged[key] = DEFAULT_SETTINGS[key];
+    }
+    if (typeof merged.messengerUrl !== "string" || (merged.messengerUrl && !isValidMessengerUrl(merged.messengerUrl))) merged.messengerUrl = "";
+    return merged;
   }
-  function gcashDrafts() {
-    const saved = read(KEYS.gcashDrafts, []);
-    return Array.isArray(saved) ? saved : [];
+  try {
+    if (localStorage.getItem("elisCrunch.messengerFlowVersion") !== "2") {
+      LEGACY_ORDER_KEYS.forEach(key => localStorage.removeItem(key));
+      localStorage.setItem("elisCrunch.messengerFlowVersion", "2");
+    }
+  } catch (error) {
+    console.error("Unable to clear legacy local demo orders and payment proofs.", error);
+    notify("Old demo order data could not be removed from this browser. Clear site storage before presenting.");
   }
-  function saveGcashDrafts(value) { return write(KEYS.gcashDrafts, value); }
-  function settings() { return { ...DEFAULT_SETTINGS, ...read(KEYS.settings, {}) }; }
   function money(value) {
     return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP", maximumFractionDigits: 0 }).format(value);
   }
@@ -132,6 +137,9 @@
   function clockMinutes(value) {
     const [hours, minutes] = value.split(":").map(Number);
     return hours * 60 + minutes;
+  }
+  function validClockTime(value) {
+    return typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
   }
   function dateKey(date) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -152,14 +160,16 @@
   }
   function isBusinessOpen(now = new Date()) {
     const minutes = now.getHours() * 60 + now.getMinutes();
-    return minutes >= clockMinutes(BUSINESS_HOURS.open) && minutes < clockMinutes(BUSINESS_HOURS.close);
+    const config = settings();
+    return minutes >= clockMinutes(config.businessOpenTime) && minutes < clockMinutes(config.businessCloseTime);
   }
   function scheduleSlotsForDate(value, now = new Date()) {
     const date = dateFromKey(value);
     if (!date) return [];
+    const config = settings();
     const today = dateKey(now);
-    const opening = clockMinutes(BUSINESS_HOURS.open);
-    const closing = clockMinutes(BUSINESS_HOURS.close);
+    const opening = clockMinutes(config.businessOpenTime);
+    const closing = clockMinutes(config.businessCloseTime);
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
     const slots = [];
     for (let minutes = opening; minutes <= closing; minutes += SCHEDULE_INTERVAL_MINUTES) {
@@ -170,13 +180,14 @@
     return slots;
   }
   function firstAvailableSchedule(now = new Date()) {
+    const config = settings();
     const today = dateKey(now);
-    for (let offset = 0; offset <= SCHEDULE_DAYS_AHEAD; offset += 1) {
+    for (let offset = 0; offset <= Number(config.maxScheduleDays); offset += 1) {
       const date = addDaysToDateKey(today, offset);
       const times = scheduleSlotsForDate(date, now);
       if (times.length) return { date, time: times[0] };
     }
-    return { date: addDaysToDateKey(today, 1), time: BUSINESS_HOURS.open };
+    return { date: addDaysToDateKey(today, 1), time: config.businessOpenTime };
   }
   function scheduleDateTime(order) {
     return dateFromKey(order.scheduledDate, order.scheduledTime);
@@ -199,32 +210,33 @@
   function scheduleOrderType(order) {
     return order.orderMode === "Scheduled" ? `Scheduled ${order.orderType}` : order.orderType;
   }
-  function paymentStatusLabel(status) {
-    if (status === "Demo Review Pending" || status === "Pending Verification") return "Demo review pending";
-    if (status === "Demo Review Complete" || status === "Verified") return "Demo review complete (simulated)";
-    if (status === "Demo Review Rejected" || status === "Rejected") return "Demo review rejected";
-    return "Demo proof not submitted";
-  }
-  function paymentReviewPending(order) {
-    return order.paymentStatus === "Demo Review Pending" || order.paymentStatus === "Pending Verification";
-  }
-  function paymentReviewComplete(order) {
-    return order.paymentStatus === "Demo Review Complete" || order.paymentStatus === "Verified";
-  }
-  function paymentReviewRejected(order) {
-    return order.paymentStatus === "Demo Review Rejected" || order.paymentStatus === "Rejected";
-  }
-  function demoOrderStatusLabel(order) {
-    if (order.paymentMethod === "GCash") {
-      if (order.status === "Payment Verification") return "DEMO · Review pending";
-      if (order.status === "Payment Rejected") return "DEMO · Review rejected";
-      if (order.status === "Confirmed") return "DEMO · Review complete (simulated)";
-    }
-    return `DEMO · ${order.status}`;
+  function orderCtaLabel() {
+    if (isBusinessOpen()) return "Order Now";
+    return settings().scheduledOrdersEnabled ? "Schedule an Order" : "View Menu";
   }
   function availablePayments(orderType, orderMode) {
-    if (orderType === "Pickup") return ["Cash on Pickup", "GCash"];
-    return orderMode === "Scheduled" ? ["GCash"] : ["Cash on Delivery", "GCash"];
+    const config = settings();
+    const methods = [];
+    if (config.gcashEnabled) methods.push("GCash");
+    if (orderType === "Pickup") {
+      if (config.cashOnPickupEnabled) methods.push("Cash on Pickup");
+      return methods;
+    }
+    if (config.codEnabled && (orderMode !== "Scheduled" || config.codScheduledEnabled)) methods.push("Cash on Delivery");
+    return methods;
+  }
+  function isValidMessengerUrl(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password) return false;
+      const host = url.hostname.toLowerCase();
+      if (host === "m.me") return /^\/[A-Za-z0-9._-]+\/?$/.test(url.pathname);
+      if (host === "messenger.com" || host === "www.messenger.com") return /^\/t\/[^/]+\/?$/.test(url.pathname);
+      if (host === "facebook.com" || host === "www.facebook.com") return /^\/messages\/t\/[^/]+\/?$/.test(url.pathname);
+      return false;
+    } catch {
+      return false;
+    }
   }
   function esc(value) {
     return String(value ?? "").replace(/[&<>"']/g, char => ({
@@ -258,27 +270,27 @@
   function cartRows() {
     const current = cart();
     const catalog = products();
-    const notes = read(KEYS.notes, {});
     return Object.entries(current).map(([id, quantity]) => {
       const product = catalog.find(item => item.id === id);
-      return product && Number(quantity) > 0 ? { product, quantity: Number(quantity), specialInstructions: notes[id] || "" } : null;
+      return product && Number(quantity) > 0 ? { product, quantity: Number(quantity), specialInstructions: cartNotes[id] || "" } : null;
     }).filter(Boolean);
   }
   function subtotal() { return cartRows().reduce((sum, row) => sum + row.product.price * row.quantity, 0); }
   function deliveryFee(type = "Delivery") {
     if (type !== "Delivery") return 0;
     const config = settings();
+    if (!config.deliveryFeeConfirmed || config.deliveryFee === null) return null;
     if (config.freeDeliveryThreshold > 0 && subtotal() >= config.freeDeliveryThreshold) return 0;
-    return Number(config.deliveryFee) || 0;
+    return config.deliveryFee;
   }
   function header() {
     const cfg = settings();
     return `<header class="site-header"><div class="nav-wrap">
       <a class="brand" href="/" data-link="/" aria-label="Eli's Crunch home"><img src="/images/eli-icon.jpg" alt="Chef Eli logo"><span>Eli's Crunch</span></a>
       <nav class="nav-links" id="main-nav" aria-label="Main navigation">
-        ${link("/", "Home")}${link("/menu", "Menu")}${link("/about", "About")}${link("/contact", "Contact")}${link("/track-order", "Track Order")}
+        ${link("/", "Home")}${link("/menu", "Menu")}${link("/about", "About")}${link("/contact", "Contact")}
       </nav>
-      <div class="nav-actions"><a class="cart-link" href="/cart" data-link="/cart" aria-label="Cart, ${cartCount()} items">Cart <span class="cart-count">${cartCount()}</span></a><a class="button button-primary" href="/menu" data-link="/menu">${isBusinessOpen() ? "Order Now" : "Schedule an Order"}</a></div>
+      <div class="nav-actions"><a class="cart-link" href="/cart" data-link="/cart" aria-label="Cart, ${cartCount()} items">Cart <span class="cart-count">${cartCount()}</span></a><a class="button button-primary" href="/menu" data-link="/menu">${orderCtaLabel()}</a></div>
       <button class="menu-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" data-action="toggle-nav">☰</button>
     </div></header>`;
   }
@@ -291,17 +303,20 @@
     const cfg = settings();
     return `<footer class="footer"><div class="container"><div class="footer-grid">
       <div><a class="brand" href="/" data-link="/"><img src="/images/eli-icon.jpg" alt=""><span>${esc(cfg.businessName)}</span></a><p style="margin-top:14px">${esc(cfg.tagline)}</p><p>Proposed location: ${esc(cfg.address)}<br>Sample hours: ${esc(cfg.hours)}</p></div>
-      <div><strong>Explore</strong><div class="footer-links" style="margin-top:14px">${link("/", "Home")}${link("/menu", "Menu")}${link("/track-order", "Track Order")}</div></div>
+      <div><strong>Explore</strong><div class="footer-links" style="margin-top:14px">${link("/", "Home")}${link("/menu", "Menu")}${link("/contact", "Contact")}</div></div>
       <div><strong>More</strong><div class="footer-links" style="margin-top:14px">${link("/about", "About")}${link("/contact", "Contact")}${link("/faq", "FAQ")}${cfg.facebook ? `<a href="${esc(cfg.facebook)}" target="_blank" rel="noopener noreferrer">Facebook</a>` : ""}</div></div>
     </div><div class="footer-bottom">© ${new Date().getFullYear()} ${esc(cfg.businessName)} · Proposal demo only · Food images are presentation placeholders and may be replaced by owner-approved photos · Hours, delivery coverage and fees require confirmation · No real payment is processed.</div></div></footer>`;
   }
   function shell(content, options = {}) {
+    const config = settings();
     const floatingCart = cartCount() && options.floating !== false
       ? `<div class="mobile-cart"><a class="button button-primary" href="/cart" data-link="/cart">🛒 View Cart — ${money(subtotal())}</a></div>` : "";
     const closedBanner = !isBusinessOpen()
-      ? `<div class="closed-banner" role="status"><div><strong>Outside this demo's sample hours</strong><br>Its 8 AM–9 PM schedule is for demonstration only; the owner has not confirmed business hours.</div>${path() === "/checkout"
-        ? `<button class="button button-outline" type="button" data-action="select-scheduled">Schedule an Order</button>`
-        : `<a class="button button-outline" href="/menu" data-link="/menu">Schedule an Order</a>`}</div>`
+      ? `<div class="closed-banner" role="status"><div><strong>Outside this demo's sample hours</strong><br>Configured sample schedule: ${esc(formatScheduleTime(config.businessOpenTime))}–${esc(formatScheduleTime(config.businessCloseTime))}. The owner has not confirmed business hours.</div>${config.scheduledOrdersEnabled
+        ? path() === "/checkout"
+          ? `<button class="button button-outline" type="button" data-action="select-scheduled">Schedule an Order</button>`
+          : `<a class="button button-outline" href="/menu" data-link="/menu">Schedule an Order</a>`
+        : ""}</div>`
       : "";
     document.body.classList.toggle("has-mobile-cart", Boolean(floatingCart));
     app.innerHTML = `${header()}${closedBanner}<main>${content}</main>${footer()}${floatingCart}`;
@@ -326,8 +341,8 @@
     return `<section class="hero"><div class="container hero-grid"><div class="eyebrow">Proposed service area: ${esc(settings().address)}</div>
       <h1>Good Food.<br><span>Big Smiles.</span><br>Delivered.</h1>
       <p class="lead">Explore the Eli's Crunch menu and preview a proposed delivery and pickup ordering experience.</p>
-      <div class="hero-actions"><a class="button button-primary" href="/menu" data-link="/menu">${isBusinessOpen() ? "Order Now" : "Schedule an Order"}</a><a class="button button-outline" href="/menu" data-link="/menu">View Menu</a></div>
-      <div class="trust-row"><span>Browse the menu anytime</span><span>Delivery or pickup proposal</span><span>Demo order tracking</span></div>
+      <div class="hero-actions"><a class="button button-primary" href="/menu" data-link="/menu">${orderCtaLabel()}</a><a class="button button-outline" href="/menu" data-link="/menu">View Menu</a></div>
+      <div class="trust-row"><span>Browse the menu anytime</span><span>Review your order before sending</span><span>Confirm details through Messenger</span></div>
       </div><div class="hero-art"><div class="hero-slideshow" role="img" aria-label="Rotating temporary demo food photos from the Eli's Crunch menu"><div class="hero-slides">${heroProducts.map((item, index) => `<figure class="hero-slide" style="--slide-index:${index}" aria-hidden="true"><img src="${esc(item.image)}" alt="" data-image-source="${esc(item.imageSource)}"><figcaption><span>From the menu</span><strong>${esc(item.name)}</strong></figcaption></figure>`).join("")}</div><div class="hero-slide-indicators" aria-hidden="true">${heroProducts.map((_, index) => `<span style="--slide-index:${index}"></span>`).join("")}</div></div></div></div></section>
       <section class="section"><div class="container"><div class="section-heading"><div><div class="eyebrow">From the menu</div><h2>Customer favorites</h2><p>Explore the Eli's Crunch menu and find something to enjoy.</p></div>${link("/menu", "See full menu →", "button button-outline")}</div>
       <div class="product-grid">${featured.map(productCard).join("")}</div></div></section>
@@ -339,9 +354,9 @@
         return `<button class="category-card" type="button" data-action="category-link" data-category="${esc(category)}" style="--category-image:url('${esc(categoryImage)}')"><span class="category-card-number">${String(index + 1).padStart(2, "0")}</span><span class="category-card-content"><strong>${esc(category)}</strong><small>${itemCount} ${itemCount === 1 ? "item" : "items"}</small></span><span class="category-card-arrow" aria-hidden="true">↗</span></button>`;
       }).join("")}</div></div></section>
       <section class="section-tight"><div class="container"><div class="section-heading"><div><div class="eyebrow">Easy as 1, 2, 3</div><h2>How it works</h2></div></div>
-      <div class="steps-grid">${[["01","Choose your food","Browse the Eli's Crunch menu."],["02","Add to cart","Review your items and quantities."],["03","Checkout","Choose delivery or pickup and a demo payment method."],["04","Enjoy your order","Save your order number and follow its status."]].map(([n,t,d]) => `<article class="step-card"><div class="step-num">${n}</div><h3>${t}</h3><p>${d}</p></article>`).join("")}</div></div></section>
-      <section class="section-tight"><div class="container"><div class="section-heading"><div><div class="eyebrow">Ordering made clearer</div><h2>Why order online?</h2></div></div><div class="benefits"><div class="benefit">Browse the menu anytime</div><div class="benefit">See your complete order before submitting</div><div class="benefit">Get an order number</div><div class="benefit">Track your order status</div></div></div></section>
-      <section class="section"><div class="container"><div class="promo-band"><div class="promo-grid"><div><h2>Ready to order?</h2><p>Good Food. Big Smiles. Browse the menu to get started.</p></div><a class="button button-primary" href="/menu" data-link="/menu">${isBusinessOpen() ? "Order Now" : "Schedule an Order"}</a></div></div></section>`;
+      <div class="steps-grid">${[["01","Choose your food","Browse the Eli's Crunch menu."],["02","Add to cart","Review your items and quantities."],["03","Checkout","Choose fulfillment, schedule, and payment preference."],["04","Message the business","Review, copy, and send your order details through Messenger."]].map(([n,t,d]) => `<article class="step-card"><div class="step-num">${n}</div><h3>${t}</h3><p>${d}</p></article>`).join("")}</div></div></section>
+      <section class="section-tight"><div class="container"><div class="section-heading"><div><div class="eyebrow">Ordering made clearer</div><h2>Why use the menu?</h2></div></div><div class="benefits"><div class="benefit">Browse the menu anytime</div><div class="benefit">Review your complete order first</div><div class="benefit">Copy order details with one tap</div><div class="benefit">Confirm directly with the business</div></div></div></section>
+      <section class="section"><div class="container"><div class="promo-band"><div class="promo-grid"><div><h2>Ready to order?</h2><p>Good Food. Big Smiles. Browse the menu to get started.</p></div><a class="button button-primary" href="/menu" data-link="/menu">${orderCtaLabel()}</a></div></div></section>`;
   }
   function menuPage() {
     const query = new URLSearchParams(location.search).get("q") || "";
@@ -374,44 +389,52 @@
     const rows = cartRows();
     if (!rows.length) return `<section class="container section"><div class="empty-state"><div class="eyebrow">Your basket</div><h1>Your cart is empty</h1><p>Browse the menu and add something delicious.</p><a class="button button-primary" href="/menu" data-link="/menu">Browse Menu</a></div></section>`;
     const fee = deliveryFee();
+    const feeText = fee === null ? "To be confirmed in Messenger" : money(fee);
+    const estimated = fee === null ? "To be confirmed" : money(subtotal() + fee);
     return `<section class="container page-top"><div class="eyebrow">Almost there</div><h1>Your Cart</h1></section><section class="container section-tight"><div class="two-col"><div class="panel">
       ${rows.map(({ product, quantity, specialInstructions }) => `<div class="cart-row"><img class="cart-thumb" src="${esc(product.image)}" alt="" onerror="this.onerror=null;this.src='/images/eli-icon.jpg'"><div><strong>${esc(product.name)}</strong><div class="muted small">${esc(product.category)} · ${money(product.price)} each</div>${specialInstructions ? `<div class="small muted">Note: ${esc(specialInstructions)}</div>` : ""}<div class="qty-control" style="margin-top:9px"><button data-action="cart-qty" data-id="${esc(product.id)}" data-change="-1" aria-label="Decrease ${esc(product.name)} quantity">−</button><span>${quantity}</span><button data-action="cart-qty" data-id="${esc(product.id)}" data-change="1" aria-label="Increase ${esc(product.name)} quantity">+</button></div></div><div style="text-align:right"><strong>${money(product.price * quantity)}</strong><button class="button button-danger" style="display:block;margin-top:8px;min-height:32px;padding:6px 9px;font-size:12px" data-action="remove-cart" data-id="${esc(product.id)}">Remove</button></div></div>`).join("")}
       <div style="display:flex;justify-content:space-between;margin-top:17px"><a class="button button-outline" href="/menu" data-link="/menu">Continue Shopping</a><button class="button button-danger" data-action="clear-cart">Clear Cart</button></div>
-      </div><aside class="panel"><h2 style="font-size:26px">Order Summary</h2><div class="summary-line"><span>Subtotal</span><strong>${money(subtotal())}</strong></div><div class="summary-line"><span>Demo delivery fee</span><span>${money(fee)}</span></div><p class="small muted">Delivery fee is a configurable demo amount and would be calculated based on your delivery area in the final system.</p><div class="summary-line total"><span>Estimated total</span><span>${money(subtotal() + fee)}</span></div><a class="button button-primary button-block" href="/checkout" data-link="/checkout">Proceed to Checkout</a></aside></div></section>`;
+      </div><aside class="panel"><h2 style="font-size:26px">Order Summary</h2><div class="summary-line"><span>Item subtotal</span><strong>${money(subtotal())}</strong></div><div class="summary-line"><span>Delivery fee</span><span>${esc(feeText)}</span></div><p class="small muted">The business will confirm delivery fees and the final total through Messenger.</p><div class="summary-line total"><span>Final total</span><span>${esc(estimated)}</span></div><a class="button button-primary button-block" href="/checkout" data-link="/checkout">Proceed to Checkout</a></aside></div></section>`;
   }
   function checkoutPage() {
     const rows = cartRows();
     if (!rows.length) return `<section class="container section"><div class="empty-state"><h1>Your cart is empty</h1><a class="button button-primary" href="/menu" data-link="/menu">Browse Menu</a></div></section>`;
-    const prior = read("elisCrunch.checkoutDraft", {});
+    const config = settings();
+    const prior = checkoutDraft;
     const error = key => checkoutErrors[key] ? `<span class="field-error">${esc(checkoutErrors[key])}</span>` : "";
     const now = new Date();
     const open = isBusinessOpen(now);
-    const orderMode = open && prior.orderMode !== "Scheduled" ? "Now" : "Scheduled";
+    const canSchedule = config.scheduledOrdersEnabled;
+    const orderMode = canSchedule && (!open || prior.orderMode === "Scheduled") ? "Scheduled" : "Now";
     const firstSchedule = firstAvailableSchedule(now);
     const minDate = dateKey(now);
-    const maxDate = addDaysToDateKey(minDate, SCHEDULE_DAYS_AHEAD);
+    const maxDate = addDaysToDateKey(minDate, Number(config.maxScheduleDays));
     let scheduledDate = prior.scheduledDate;
     if (!scheduledDate || scheduledDate < minDate || scheduledDate > maxDate || !scheduleSlotsForDate(scheduledDate, now).length) {
       scheduledDate = firstSchedule.date;
     }
     const availableSlots = scheduleSlotsForDate(scheduledDate, now);
     const scheduledTime = availableSlots.includes(prior.scheduledTime) ? prior.scheduledTime : availableSlots[0];
-    const orderType = prior.orderType === "Pickup" ? "Pickup" : "Delivery";
+    const fallbackOrderType = config.deliveryEnabled ? "Delivery" : "Pickup";
+    const orderType = prior.orderType === "Pickup" && config.pickupEnabled ? "Pickup"
+      : prior.orderType === "Delivery" && config.deliveryEnabled ? "Delivery" : fallbackOrderType;
     const paymentOptions = availablePayments(orderType, orderMode);
-    let payment = paymentOptions.includes(prior.payment) ? prior.payment : paymentOptions[0];
+    const payment = paymentOptions.includes(prior.payment) ? prior.payment : paymentOptions[0] || "";
     const dateTimeLabel = `${formatScheduleDate(firstSchedule.date)} at ${formatScheduleTime(firstSchedule.time)}`;
-    return `<section class="container page-top"><div class="eyebrow">Proposal walkthrough</div><h1>Demo Checkout</h1><p class="muted">No order is sent and no payment is taken.</p></section><div class="container section-tight"><div class="demo-payment-callout"><strong>Use fictional details only.</strong> Business hours, delivery coverage and fees, and pickup availability/location are not owner-confirmed. Any options and amounts shown are examples.</div></div><section class="container section-tight"><form id="checkout-form" novalidate><div class="two-col"><div>
-      <div class="panel"><h2 style="font-size:25px">Customer Information</h2><div class="form-grid">
-      <div class="field"><label for="customer-name">Full Name *</label><input id="customer-name" name="name" autocomplete="name" value="${esc(prior.name || "")}" required>${error("name")}</div>
-      <div class="field"><label for="customer-phone">Mobile Number *</label><input id="customer-phone" name="phone" type="tel" autocomplete="tel" placeholder="09XXXXXXXXX" value="${esc(prior.phone || "")}" required>${error("phone")}</div></div></div>
-      <div class="panel"><h2 style="font-size:25px">Order Type</h2><div class="choice-row"><label class="choice-card"><input type="radio" name="orderType" value="Delivery" ${orderType === "Delivery" ? "checked" : ""}> Delivery</label><label class="choice-card"><input type="radio" name="orderType" value="Pickup" ${orderType === "Pickup" ? "checked" : ""}> Pickup</label></div>${error("orderType")}
-      <div id="delivery-fields" style="${orderType === "Pickup" ? "display:none" : ""};margin-top:15px"><div class="form-grid"><div class="field field-full"><label for="address">Address *</label><input id="address" name="address" autocomplete="street-address" value="${esc(prior.address || "")}">${error("address")}</div><div class="field"><label for="barangay">Barangay *</label><input id="barangay" name="barangay" value="${esc(prior.barangay || "")}">${error("barangay")}</div><div class="field"><label for="landmark">Landmark</label><input id="landmark" name="landmark" value="${esc(prior.landmark || "")}"></div><div class="field field-full"><label for="delivery-notes">Delivery Notes</label><textarea id="delivery-notes" name="notes">${esc(prior.notes || "")}</textarea></div></div></div></div>
-      <div class="panel"><h2 style="font-size:25px">When would you like your order?</h2><div class="choice-row"><label class="choice-card ${!open ? "choice-disabled" : ""}"><input type="radio" name="orderMode" value="Now" ${orderMode === "Now" ? "checked" : ""} ${!open ? "disabled" : ""}> Order Now</label><label class="choice-card"><input type="radio" name="orderMode" value="Scheduled" ${orderMode === "Scheduled" ? "checked" : ""}> Schedule for Later</label></div>${error("orderMode")}
-      ${orderMode === "Scheduled" ? `<div class="schedule-fields"><p class="small muted"><strong>Next demo slot:</strong> ${esc(dateTimeLabel)} · Sample hours are unconfirmed.</p><div class="form-grid"><div class="field"><label for="scheduled-date">Date</label><input id="scheduled-date" name="scheduledDate" type="date" min="${minDate}" max="${maxDate}" value="${scheduledDate}" required>${error("scheduledDate")}</div><div class="field"><label for="scheduled-time">Time</label><select id="scheduled-time" name="scheduledTime" required>${availableSlots.map(time => `<option value="${time}" ${time === scheduledTime ? "selected" : ""}>${formatScheduleTime(time)}</option>`).join("")}</select>${error("scheduledTime")}</div></div></div>` : open ? `<p class="small muted" style="margin-bottom:0">Within the sample schedule. Actual business hours need owner confirmation.</p>` : ""}
-      </div>
-      <div class="panel"><h2 style="font-size:25px">Demo Payment Method *</h2><p class="small muted">Selections only; nothing is charged or sent. Delivery, pickup, and payment policies are unconfirmed examples.</p><div class="choice-row">${paymentOptions.map(method =>
-        `<label class="choice-card"><input type="radio" name="payment" value="${method}" ${payment === method ? "checked" : ""}> ${method}</label>`).join("")}</div>${error("payment")}<p class="small muted" style="margin:12px 0 0">${orderMode === "Scheduled" && orderType === "Delivery" ? "Scheduled delivery demo uses the simulated GCash screenshot-review flow." : "GCash opens a simulated review walkthrough only; do not send money or use real details."}</p></div>
-      </div><aside><div class="panel"><h2 style="font-size:25px">Your Demo Order</h2><p><strong>Order Type:</strong> ${orderMode === "Scheduled" ? "Scheduled order demo" : "Order now demo"}</p>${orderMode === "Scheduled" ? `<p><strong>Sample schedule:</strong><br>${esc(formatScheduleDate(scheduledDate))}<br>${esc(formatScheduleTime(scheduledTime))}</p>` : ""}${rows.map(({product, quantity}) => `<div class="summary-line"><span>${esc(product.name)} × ${quantity}</span><strong>${money(product.price * quantity)}</strong></div>`).join("")}            ${checkoutErrors.cart ? `<p class="alert">${esc(checkoutErrors.cart)}</p>` : ""}<div class="summary-line"><span>Subtotal</span><strong>${money(subtotal())}</strong></div><div class="summary-line"><span>Unconfirmed demo delivery fee</span><span id="checkout-fee">${money(deliveryFee(orderType))}</span></div><div class="summary-line total"><span>Demo total (not charged)</span><span id="checkout-total">${money(subtotal() + deliveryFee(orderType))}</span></div><p class="small muted">This proposal does not send orders to Eli's Crunch.</p><button class="button button-outline button-block" type="button" data-action="edit-order">Edit Order</button><button class="button button-primary button-block" style="margin-top:10px" type="submit">${payment === "GCash" ? "Continue to GCash Demo" : "Place Demo Order"}</button></div></aside></div></form></section>`;
+    const configuredFee = config.deliveryFeeConfirmed && config.deliveryFee !== null ? (config.freeDeliveryThreshold > 0 && subtotal() >= config.freeDeliveryThreshold ? 0 : config.deliveryFee) : null;
+    const feeLine = orderType === "Pickup" ? `<div class="summary-line"><span>Delivery fee</span><span>Not applicable</span></div>` : `<div class="summary-line"><span>Delivery fee</span><span>${configuredFee === null ? "To be confirmed in Messenger" : money(configuredFee)}</span></div>`;
+    const feeNote = orderType === "Delivery" && configuredFee === null ? "Delivery charge is not configured. Eli's Crunch will confirm it and the final total in Messenger." : "The business must confirm order availability and the final total in Messenger.";
+    const paymentNotice = paymentOptions.length ? "" : `<p class="alert">No payment methods are currently enabled for this order type. Ask the owner to enable a method in Ordering & Checkout Settings.</p>`;
+    const scheduleFields = orderMode === "Scheduled"
+      ? `<div class="schedule-fields"><p class="small muted"><strong>Preferred schedule</strong> · ${esc(dateTimeLabel)} · Owner-confirmed hours required.</p><div class="form-grid"><div class="field"><label for="scheduled-date">Preferred date *</label><input id="scheduled-date" name="scheduledDate" type="date" min="${minDate}" max="${maxDate}" value="${esc(scheduledDate)}" required>${error("scheduledDate")}</div><div class="field"><label for="scheduled-time">Preferred time *</label><select id="scheduled-time" name="scheduledTime" required>${availableSlots.map(time => `<option value="${time}" ${time === scheduledTime ? "selected" : ""}>${formatScheduleTime(time)}</option>`).join("")}</select>${error("scheduledTime")}</div></div></div>` : "";
+    const result = messengerResult ? `<div class="messenger-result panel" id="messenger-result" role="status" aria-live="polite"><div class="eyebrow">Next step required</div><h2>Review and send your message</h2><p>${esc(messengerResult.status)}</p><p><strong>Your order is not confirmed until Eli's Crunch replies through Messenger. Please verify your details before sending.</strong></p><label for="order-message">Order details to paste into Messenger</label><textarea id="order-message" readonly rows="18">${esc(messengerResult.message)}</textarea><button class="button button-outline button-block" type="button" data-action="copy-order-message">Copy Order Details</button><p class="small muted">${messengerResult.opened ? "Messenger was opened in a new tab. Paste the copied message into that conversation and press Send." : "Messenger did not open. Copy the message, then open the official Messenger link after configuring it."}</p></div>` : "";
+    return `<section class="container page-top"><div class="eyebrow">Checkout</div><h1>Review Your Order</h1><p class="lead">Prepare a message for Eli's Crunch. Nothing is sent until you paste and send it in Messenger.</p></section><section class="container section-tight"><form id="checkout-form" novalidate><div class="two-col"><div>
+      <div class="panel"><h2 style="font-size:25px">Customer Information</h2><div class="form-grid"><div class="field"><label for="customer-name">Full name *</label><input id="customer-name" name="name" autocomplete="name" value="${esc(prior.name || "")}" required aria-describedby="error-name">${error("name")}</div><div class="field"><label for="customer-phone">Contact number *</label><input id="customer-phone" name="phone" type="tel" autocomplete="tel" value="${esc(prior.phone || "")}" required aria-describedby="error-phone">${error("phone")}</div></div></div>
+      <div class="panel"><h2 style="font-size:25px">Fulfillment</h2><div class="choice-row"><label class="choice-card ${config.deliveryEnabled ? "" : "choice-disabled"}"><input type="radio" name="orderType" value="Delivery" ${orderType === "Delivery" ? "checked" : ""} ${config.deliveryEnabled ? "" : "disabled"}> Delivery</label><label class="choice-card ${config.pickupEnabled ? "" : "choice-disabled"}"><input type="radio" name="orderType" value="Pickup" ${orderType === "Pickup" ? "checked" : ""} ${config.pickupEnabled ? "" : "disabled"}> Pickup</label></div>${error("orderType")}
+      <div id="delivery-fields" class="form-grid" style="${orderType === "Pickup" ? "display:none" : "margin-top:15px"}"><div class="field"><label for="barangay">Barangay *</label><input id="barangay" name="barangay" value="${esc(prior.barangay || "")}" autocomplete="address-level3">${error("barangay")}</div><div class="field"><label for="city">City / Municipality *</label><input id="city" name="city" value="${esc(prior.city || "")}" autocomplete="address-level2">${error("city")}</div><div class="field field-full"><label for="address">Street / Sitio / Purok *</label><input id="address" name="address" autocomplete="street-address" value="${esc(prior.address || "")}">${error("address")}</div><div class="field field-full"><label for="house-details">House / Building details</label><input id="house-details" name="houseDetails" value="${esc(prior.houseDetails || "")}"></div><div class="field field-full"><label for="landmark">Nearby landmark</label><input id="landmark" name="landmark" value="${esc(prior.landmark || "")}"></div><div class="field field-full"><label for="delivery-notes">Delivery instructions</label><textarea id="delivery-notes" name="notes">${esc(prior.notes || "")}</textarea></div></div></div>
+      <div class="panel"><h2 style="font-size:25px">Preferred timing</h2><div class="choice-row"><label class="choice-card"><input type="radio" name="orderMode" value="Now" ${orderMode === "Now" ? "checked" : ""}> ASAP (subject to confirmation)</label>${canSchedule ? `<label class="choice-card"><input type="radio" name="orderMode" value="Scheduled" ${orderMode === "Scheduled" ? "checked" : ""}> Schedule for later</label>` : ""}</div>${error("orderMode")}${scheduleFields}</div>
+      <div class="panel"><h2 style="font-size:25px">Payment preference</h2><p class="small muted"><strong>Demo only:</strong> selecting a method does not charge you or mark payment as received. Confirm payment instructions directly with the business.</p>${paymentNotice}<div class="choice-row">${paymentOptions.map(method => `<label class="choice-card"><input type="radio" name="payment" value="${esc(method)}" ${payment === method ? "checked" : ""}> ${esc(method)}</label>`).join("")}</div>${error("payment")}</div>
+      </div><aside><div class="panel checkout-summary"><h2 style="font-size:25px">Order Summary</h2>${rows.map(({product, quantity, specialInstructions}) => `<div class="summary-line"><span>${esc(product.name)} × ${quantity}${specialInstructions ? `<br><small class="muted">${esc(specialInstructions)}</small>` : ""}</span><strong>${money(product.price * quantity)}</strong></div>`).join("")}<div class="summary-line"><span>Item subtotal</span><strong>${money(subtotal())}</strong></div>${feeLine}<div class="summary-line total"><span>${orderType === "Delivery" && configuredFee === null ? "Final total" : "Estimated total"}</span><strong>${orderType === "Delivery" && configuredFee === null ? "To be confirmed" : money(subtotal() + (configuredFee || 0))}</strong></div><p class="small muted">${esc(feeNote)}</p><p class="checkout-confirmation">Your details are only kept in this page until you leave or refresh. Review the generated message, then paste and send it yourself in Messenger. Your order is not confirmed until Eli's Crunch replies.</p><button class="button button-outline button-block" type="button" data-action="copy-order-message" ${messengerResult ? "" : "disabled"}>Copy Order Details</button><button class="button button-primary button-block messenger-submit" type="button" data-action="place-order-messenger" ${messengerRequestPending || !paymentOptions.length ? "disabled" : ""}>${messengerRequestPending ? "Preparing Message..." : "Place Order via Messenger"}</button><p class="small muted messenger-url-hint">${config.messengerUrl ? "Messenger destination is configured in this browser." : "Messenger checkout is not configured yet. Ask the owner to add and test the official Messenger URL."}</p></div></aside></div></form>${result}</section>`;
   }
   function orderItems(order) {
     return (order.items || []).map(item => `<div class="summary-line"><span>${esc(item.name)} × ${item.quantity}${item.specialInstructions ? `<br><small class="muted">Note: ${esc(item.specialInstructions)}</small>` : ""}</span><strong>${money(item.price * item.quantity)}</strong></div>`).join("");
@@ -453,10 +476,10 @@
   }
   function contactPage() {
     const cfg = settings();
-    return `<section class="container section"><div class="eyebrow">Proposal demo · Owner confirmation needed</div><h1>Contact & Service Details</h1><p class="lead">The information below is illustrative and must be confirmed by Eli's Crunch before the website is used with customers.</p><div class="panel" style="max-width:640px"><p><strong>Proposed locality (unconfirmed)</strong><br>${esc(cfg.address)}</p><p><strong>Sample hours (unconfirmed)</strong><br>${esc(cfg.hours)}</p><p><strong>Delivery coverage & fees</strong><br>Not confirmed; the delivery fee shown at checkout is a sample only.</p><p><strong>Pickup availability & location</strong><br>Not confirmed.</p>${cfg.phone ? `<p><strong>Demo contact (confirm with owner)</strong><br><a href="tel:${esc(cfg.phone)}">${esc(cfg.phone)}</a></p>` : `<p><strong>Contact information</strong><br>Not provided for this demo.</p>`}${cfg.facebook ? `<a class="button button-outline" href="${esc(cfg.facebook)}" target="_blank" rel="noopener noreferrer">Facebook page (confirm with owner)</a>` : `<p>Facebook page information has not been provided.</p>`}</div></section>`;
+    return `<section class="container section"><div class="eyebrow">Proposal demo · Owner confirmation needed</div><h1>Contact & Service Details</h1><p class="lead">Confirm these details directly with Eli's Crunch. Messenger orders will not appear in a website inbox.</p><div class="panel" style="max-width:640px"><p><strong>Proposed locality (unconfirmed)</strong><br>${esc(cfg.address)}</p><p><strong>Sample hours (unconfirmed)</strong><br>${esc(cfg.hours)}</p><p><strong>Delivery coverage (unconfirmed)</strong><br>${cfg.deliveryAreas ? esc(cfg.deliveryAreas) : "Not provided for this proposal."}</p><p><strong>Delivery fees</strong><br>Not confirmed. The business will confirm any delivery charge and final total through Messenger.</p><p><strong>Pickup availability & location</strong><br>Not confirmed.</p>${cfg.phone ? `<p><strong>Contact number (confirm with owner)</strong><br><a href="tel:${esc(cfg.phone)}">${esc(cfg.phone)}</a></p>` : `<p><strong>Contact information</strong><br>Not provided for this proposal.</p>`}${cfg.facebook ? `<a class="button button-outline" href="${esc(cfg.facebook)}" target="_blank" rel="noopener noreferrer">Facebook page (confirm destination)</a>` : `<p>Facebook page information has not been provided.</p>`}</div></section>`;
   }
   function faqPage() {
-    const pairs = [["How do I place an order?", "Browse the menu, add items to your cart, and complete the checkout form."], ["Can I choose delivery or pickup?", "Yes. This demo checkout allows you to choose delivery or pickup."], ["How do I track an order?", "Use the order number from the confirmation page on Track Order."], ["Is payment processed online?", "No. Payment choices in this proposal are demo selections only."]];
+    const pairs = [["How do I place an order?", "Add menu items to your cart, complete checkout, then paste the generated message into Messenger and press Send."], ["Is my order confirmed when Messenger opens?", "No. Your order is not confirmed until Eli's Crunch replies through Messenger."], ["Can I choose delivery or pickup?", "Choose an option shown at checkout; availability and pickup details must be confirmed by the owner."], ["Is payment processed on this website?", "No. Payment is not processed or verified here. The business confirms order availability, final total, and payment instructions through Messenger."], ["Can I track a Messenger order here?", "No. Facebook Messenger orders are not automatically imported into or synchronized with this website."]];
     return `<section class="container section"><div class="eyebrow">Helpful answers</div><h1>Frequently Asked Questions</h1><div class="panel">${pairs.map(([q,a]) => `<details style="padding:14px 0;border-bottom:1px solid var(--line)"><summary style="font-weight:800;cursor:pointer">${q}</summary><p class="muted" style="margin:10px 0 0">${a}</p></details>`).join("")}</div></section>`;
   }
   function renderPublic() {
@@ -467,10 +490,7 @@
     else if (current.startsWith("/menu/")) { detailQuantity = Math.max(1, detailQuantity); content = detailPage(current.split("/")[2]); }
     else if (current === "/cart") content = cartPage();
     else if (current === "/checkout") content = checkoutPage();
-    else if (current === "/payment/gcash") content = gcashPaymentPage();
-    else if (current === "/order-success") content = orderSuccessPage();
-    else if (current === "/track-order") content = trackPage();
-    else if (current.startsWith("/track-order/")) content = trackPage(decodeURIComponent(current.slice("/track-order/".length)));
+    else if (["/payment/gcash", "/order-success", "/track-order"].includes(current) || current.startsWith("/track-order/")) content = `<section class="container section"><div class="empty-state"><div class="eyebrow">Messenger ordering</div><h1>Orders are handled in Messenger</h1><p>This website does not submit orders to a dashboard or provide order tracking. Paste your prepared order details into the official Messenger conversation and press Send. The order is not confirmed until Eli's Crunch replies.</p><a class="button button-primary" href="/checkout" data-link="/checkout">Return to Checkout</a></div></section>`;
     else if (current === "/about") content = aboutPage();
     else if (current === "/contact") content = contactPage();
     else if (current === "/faq") content = faqPage();
@@ -478,54 +498,65 @@
     shell(content);
   }
   function saveCheckoutDraft(form) {
-    const data = Object.fromEntries(new FormData(form).entries());
-    write("elisCrunch.checkoutDraft", data);
+    checkoutDraft = Object.fromEntries(new FormData(form).entries());
+    messengerResult = null;
   }
   function validateCheckout(data) {
     const errors = {};
-    if (!String(data.name || "").trim()) errors.name = "Please enter your name.";
+    const config = settings();
+    if (!String(data.name || "").trim()) errors.name = "Please enter your full name.";
+    else if (String(data.name).trim().length > 120) errors.name = "Name must be 120 characters or fewer.";
     if (!String(data.phone || "").trim()) errors.phone = "Please enter your mobile number.";
-    else if (!/^[+()\d\s-]{7,20}$/.test(data.phone.trim())) errors.phone = "Please enter a valid mobile number.";
-    if (!data.orderType) errors.orderType = "Please choose delivery or pickup.";
+    else if (!/^[+()\d\s-]{7,20}$/.test(data.phone.trim())) errors.phone = "Enter a valid contact number.";
+    if (!["Delivery", "Pickup"].includes(data.orderType)) errors.orderType = "Choose delivery or pickup.";
+    if (data.orderType === "Delivery" && !config.deliveryEnabled) errors.orderType = "Delivery is not currently enabled. Choose pickup or contact the owner.";
+    if (data.orderType === "Pickup" && !config.pickupEnabled) errors.orderType = "Pickup is not currently enabled. Choose delivery or contact the owner.";
     if (data.orderType === "Delivery") {
-      if (!String(data.address || "").trim()) errors.address = "Please enter your delivery address.";
-      if (!String(data.barangay || "").trim()) errors.barangay = "Please enter your barangay.";
+      if (!String(data.address || "").trim()) errors.address = "Enter your street, sitio, or purok.";
+      if (!String(data.barangay || "").trim()) errors.barangay = "Enter your barangay.";
+      if (!String(data.city || "").trim()) errors.city = "Enter your city or municipality.";
     }
-    if (!availablePayments(data.orderType, data.orderMode).includes(data.payment)) errors.payment = "Choose a payment method available for this order type and schedule.";
-    if (!cartRows().length) errors.cart = "Your cart is empty.";
+    const cartContents = cart();
+    const catalog = products();
+    const selectedRows = Object.entries(cartContents);
+    if (!selectedRows.length) errors.cart = "Your cart is empty. Add at least one available menu item.";
+    for (const [id, quantity] of selectedRows) {
+      const item = catalog.find(product => product.id === id);
+      if (!item) errors.cart = "A menu item in your cart is no longer available. Review your cart.";
+      else if (item.available === false) errors.cart = `${item.name} is no longer available. Remove it from your cart to continue.`;
+      else if (!Number.isInteger(Number(quantity)) || Number(quantity) < 1 || Number(quantity) > 99) errors.cart = "A cart quantity is invalid. Update your cart and try again.";
+      else if (!Number.isFinite(Number(item.price)) || Number(item.price) < 0) errors.cart = `${item.name} has an invalid current price. Contact the owner.`;
+    }
+    const currentSubtotal = selectedRows.reduce((sum, [id, quantity]) => {
+      const item = catalog.find(product => product.id === id);
+      return item && Number.isInteger(Number(quantity)) ? sum + Number(item.price) * Number(quantity) : sum;
+    }, 0);
+    if (currentSubtotal < Number(config.minimumOrder || 0)) errors.cart = `The current minimum order is ${money(config.minimumOrder)}.`;
     const now = new Date();
     const scheduled = data.orderMode === "Scheduled";
-    if (!scheduled && !isBusinessOpen(now)) errors.orderMode = "We're currently closed. Please schedule your order for 8:00 AM or later.";
-    else if (!scheduled && data.orderMode !== "Now") errors.orderMode = "Please choose when you would like your order.";
+    if (scheduled && !config.scheduledOrdersEnabled) errors.orderMode = "Scheduled orders are currently disabled. Choose ASAP.";
+    if (!scheduled && data.orderMode !== "Now") errors.orderMode = "Choose ASAP or schedule your order.";
     if (scheduled) {
-      if (!data.scheduledDate) errors.scheduledDate = "Please choose a date for your scheduled order.";
-      if (!data.scheduledTime) errors.scheduledTime = "Please choose a time for your scheduled order.";
+      if (!data.scheduledDate) errors.scheduledDate = "Choose a preferred date.";
+      if (!data.scheduledTime) errors.scheduledTime = "Choose a preferred time.";
       const scheduledAt = dateFromKey(data.scheduledDate || "", data.scheduledTime || "");
       const today = dateKey(now);
-      const latestDate = addDaysToDateKey(today, SCHEDULE_DAYS_AHEAD);
+      const latestDate = addDaysToDateKey(today, Number(config.maxScheduleDays));
       if (data.scheduledDate && (!scheduledAt || data.scheduledDate < today || data.scheduledDate > latestDate)) {
-        errors.scheduledDate = `Choose a valid date from today through the next ${SCHEDULE_DAYS_AHEAD} days.`;
+        errors.scheduledDate = `Choose a valid date from today through the next ${config.maxScheduleDays} days.`;
       }
       if (scheduledAt) {
         const scheduledMinutes = scheduledAt.getHours() * 60 + scheduledAt.getMinutes();
-        if (scheduledMinutes < clockMinutes(BUSINESS_HOURS.open) || scheduledMinutes > clockMinutes(BUSINESS_HOURS.close) || scheduledMinutes % SCHEDULE_INTERVAL_MINUTES !== 0) {
-          errors.scheduledTime = "Choose a time during business hours.";
+        if (scheduledMinutes < clockMinutes(config.businessOpenTime) || scheduledMinutes > clockMinutes(config.businessCloseTime) || scheduledMinutes % SCHEDULE_INTERVAL_MINUTES !== 0) {
+          errors.scheduledTime = "Choose a time within the configured sample business hours.";
         } else if (scheduledAt <= now) {
-          errors.scheduledTime = "Choose a future time that has not passed.";
+          errors.scheduledTime = "Choose a future time.";
         }
       }
     }
-    if (!availablePayments(data.orderType, data.orderMode).includes(data.payment)) {
-      errors.payment = data.orderType === "Delivery" && scheduled
-        ? "Scheduled deliveries require GCash."
-        : data.orderType === "Pickup"
-          ? "Pickup orders require GCash or Cash on Pickup."
-          : "Immediate deliveries require Cash on Delivery or GCash.";
-    }
-    const cfg = settings();
-    if (data.orderType === "Delivery" && !cfg.deliveryEnabled) errors.orderType = "Delivery is not enabled in the demo settings.";
-    if (data.orderType === "Pickup" && !cfg.pickupEnabled) errors.orderType = "Pickup is not enabled in the demo settings.";
-    if (subtotal() < Number(cfg.minimumOrder || 0)) errors.cart = `The demo minimum order is ${money(cfg.minimumOrder)}.`;
+    const enabledMethods = availablePayments(data.orderType, data.orderMode);
+    if (!enabledMethods.length) errors.payment = "No payment methods are enabled for this order. Ask the owner to configure one.";
+    else if (!enabledMethods.includes(data.payment)) errors.payment = "This payment method is disabled or unavailable for the selected fulfillment and schedule. Choose an enabled method.";
     return errors;
   }
   function nextOrderId() {
@@ -556,33 +587,132 @@
       updatedAt: now
     };
   }
-  function placeOrder(form) {
+  function messageValue(value) {
+    return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function buildMessengerOrderMessage(data) {
+    const config = settings();
+    const selectedRows = Object.entries(cart()).map(([id, quantity]) => {
+      const product = products().find(item => item.id === id);
+      return { product, quantity: Number(quantity), specialInstructions: cartNotes[id] || "" };
+    }).filter(row => row.product);
+    const orderSubtotal = selectedRows.reduce((sum, row) => sum + row.product.price * row.quantity, 0);
+    const confirmedFee = data.orderType === "Delivery" ? deliveryFee("Delivery") : 0;
+    const paymentSummary = data.payment === "GCash"
+      ? "Payment status: Not yet paid — awaiting confirmation and payment instructions."
+      : data.payment === "Cash on Delivery"
+        ? "Payment method: Cash on Delivery — payment due upon delivery, subject to order confirmation."
+        : "Payment method: Cash on Pickup — payment due upon pickup, subject to order confirmation.";
+    const lines = [
+      `Hi, ${messageValue(config.businessName)}! 👋 I'd like to place an order.`,
+      "",
+      "🛒 MY ORDER",
+      ...selectedRows.flatMap(({ product, quantity, specialInstructions }) => [
+        `${messageValue(product.name)} × ${quantity} — ${moneyExact(product.price)} each = ${moneyExact(product.price * quantity)}`,
+        ...(specialInstructions ? [`  Note: ${messageValue(specialInstructions)}`] : [])
+      ]),
+      "",
+      `Subtotal: ${moneyExact(orderSubtotal)}`,
+      ...(data.orderType === "Delivery"
+        ? [`Delivery fee: ${confirmedFee === null ? "Please confirm through Messenger" : moneyExact(confirmedFee)}`,
+          `Final total: ${confirmedFee === null ? "Please confirm through Messenger" : moneyExact(orderSubtotal + confirmedFee)}`]
+        : ["Delivery fee: Not applicable (pickup)", `Pickup subtotal: ${moneyExact(orderSubtotal)} — please confirm final total`]),
+      "",
+      "📦 ORDER DETAILS",
+      `Order type: ${data.orderType}`,
+      `Preferred date: ${data.orderMode === "Scheduled" ? messageValue(formatScheduleDate(data.scheduledDate)) : "ASAP (subject to confirmation)"}`,
+      ...(data.orderMode === "Scheduled" ? [`Preferred time: ${messageValue(formatScheduleTime(data.scheduledTime))}`] : []),
+      "",
+      "👤 CUSTOMER INFORMATION",
+      `Full name: ${messageValue(data.name)}`,
+      `Contact number: ${messageValue(data.phone)}`,
+      ...(data.orderType === "Delivery" ? [
+        "",
+        "📍 DELIVERY ADDRESS",
+        `Barangay: ${messageValue(data.barangay)}`,
+        `Street / Sitio / Purok: ${messageValue(data.address)}`,
+        ...(messageValue(data.houseDetails) ? [`House / Building details: ${messageValue(data.houseDetails)}`] : []),
+        `City / Municipality: ${messageValue(data.city)}`,
+        ...(messageValue(data.landmark) ? [`Landmark: ${messageValue(data.landmark)}`] : []),
+        ...(messageValue(data.notes) ? [`Delivery instructions: ${messageValue(data.notes)}`] : [])
+      ] : []),
+      "",
+      "💳 PAYMENT INFORMATION",
+      `Preferred payment method: ${messageValue(data.payment)}`,
+      paymentSummary,
+      "",
+      "Please confirm the availability of my order, delivery fee if applicable, and final total before preparation. Thank you! 😊"
+    ];
+    return lines.join("\n");
+  }
+  async function copyOrderMessage(message) {
+    if (!message) return false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(message);
+        return true;
+      } catch (error) {
+        console.warn("Clipboard permission was not granted; the order message remains available for manual copying.", error);
+      }
+    }
+    const textarea = document.getElementById("order-message");
+    if (!textarea) return false;
+    textarea.focus();
+    textarea.select();
+    try {
+      return document.execCommand("copy");
+    } catch (error) {
+      console.warn("The browser could not copy the order message.", error);
+      return false;
+    }
+  }
+  async function placeOrderViaMessenger(button) {
+    if (messengerRequestPending) return;
+    const form = document.getElementById("checkout-form");
+    if (!form) return;
     const data = Object.fromEntries(new FormData(form).entries());
-    saveCheckoutDraft(form);
+    checkoutDraft = data;
     checkoutErrors = validateCheckout(data);
     if (Object.keys(checkoutErrors).length) {
+      messengerResult = null;
       render();
-      const firstError = document.querySelector(".field-error, .alert");
-      if (firstError) firstError.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.querySelector(".field-error, .alert")?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
-    if (data.payment === "GCash") {
-      const draft = buildOrder(data);
-      draft.status = "Awaiting Payment";
-      draft.paymentStatus = "Awaiting Payment";
-      if (!saveGcashDrafts([...gcashDrafts(), draft])) return;
-      checkoutErrors = {};
-      go(`/payment/gcash?id=${encodeURIComponent(draft.id)}`);
-      return;
+    const message = buildMessengerOrderMessage(data);
+    const destination = settings().messengerUrl;
+    let messengerWindow = null;
+    let opened = false;
+    let status;
+    if (!destination) {
+      status = "The official Messenger URL is missing or invalid. Your message is ready below; configure and test the correct Facebook/Messenger destination before using checkout.";
+    } else {
+      try {
+        messengerWindow = window.open(destination, "_blank");
+      } catch (error) {
+        console.warn("The browser could not open Messenger.", error);
+      }
+      if (messengerWindow) {
+        opened = true;
+        try { messengerWindow.opener = null; } catch (error) {
+          console.warn("The Messenger tab opener could not be isolated.", error);
+        }
+        status = "Messenger opened. The website has not sent your order. Paste the message below into the conversation and press Send.";
+      } else {
+        status = "Your browser blocked the Messenger tab. Your order message is still available below; copy it and open the configured conversation manually.";
+      }
     }
-    const order = buildOrder(data);
-    if (!write(KEYS.orders, [...orders(), order])) return;
-    write(KEYS.lastOrder, order.id);
-    write(KEYS.cart, {});
-    write(KEYS.notes, {});
-    localStorage.removeItem("elisCrunch.checkoutDraft");
-    checkoutErrors = {};
-    go(`/order-success?id=${encodeURIComponent(order.id)}`);
+    messengerRequestPending = true;
+    if (button) button.disabled = true;
+    const copied = await copyOrderMessage(message);
+    messengerRequestPending = false;
+    messengerResult = {
+      message,
+      opened,
+      status: `${status}${copied ? " The message was copied to your clipboard." : " Clipboard access was unavailable; use Copy Order Details or select and copy the message below."}`
+    };
+    render();
+    document.getElementById("messenger-result")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
   function gcashDraftById(id) {
     return gcashDrafts().find(draft => draft.id === id);
@@ -639,7 +769,7 @@
   function clearCartAfterPayment(order) {
     write(KEYS.lastOrder, order.id);
     write(KEYS.cart, {});
-    write(KEYS.notes, {});
+    cartNotes = {};
     localStorage.removeItem("elisCrunch.checkoutDraft");
     checkoutErrors = {};
   }
@@ -733,16 +863,12 @@
   }
   function adminNav() {
     const current = path();
-    const nav = [["/admin/dashboard","Dashboard"],["/admin/orders","Orders"],["/admin/menu","Menu Management"],["/admin/delivery","Delivery Settings"],["/admin/settings","Business Settings"]];
-    return `<aside class="admin-side"><div class="admin-brand"><img src="/images/eli-icon.jpg" alt=""><span>Eli's Crunch<br><small>Admin</small></span></div><div style="margin:0 8px 18px"><span class="demo-tag">DEMO MODE</span></div><nav class="admin-nav">${nav.map(([url,label]) => `<a href="${url}" data-link="${url}" class="${current === url ? "active" : ""}">${label}</a>`).join("")}<button type="button" data-action="admin-logout">Log out</button></nav></aside>`;
+    const nav = [["/admin/dashboard","Dashboard"],["/admin/menu","Menu Management"],["/admin/settings","Ordering & Checkout Settings"]];
+    return `<aside class="admin-side"><div class="admin-brand"><img src="/images/eli-icon.jpg" alt=""><span>Eli's Crunch<br><small>Admin</small></span></div><div style="margin:0 8px 18px"><span class="demo-tag">BROWSER-ONLY</span></div><nav class="admin-nav">${nav.map(([url,label]) => `<a href="${url}" data-link="${url}" class="${current === url ? "active" : ""}">${label}</a>`).join("")}</nav></aside>`;
   }
   function adminLayout(content, title) {
     document.body.classList.remove("has-mobile-cart");
     app.innerHTML = `<div class="admin-shell">${adminNav()}<div class="admin-main"><header class="admin-top"><div><strong>${esc(title)}</strong><div class="small muted">Eli's Crunch · Proposal demo only</div></div><span class="demo-tag">DEMO MODE</span></header><main class="admin-content">${content}</main></div></div>`;
-  }
-  function adminLogin() {
-    document.body.classList.remove("has-mobile-cart");
-    app.innerHTML = `<main class="login-wrap"><form class="login-card" id="admin-login"><img class="login-logo" src="/images/eli-icon.jpg" alt="Eli's Crunch logo placeholder"><h1>Eli's Crunch Admin</h1><p class="muted" style="text-align:center">Sign in to the proposal dashboard</p><div class="demo-note"><strong>Public Demo Admin Access</strong><br>Email: demo@eliscrunch.local<br>Password: demo123<br><small>These public demo credentials are not secret. Frontend-only demo protection is not production authentication. Never reuse these credentials or enter real customer/payment data.</small></div><div class="field"><label for="admin-email">Demo email</label><input id="admin-email" name="email" type="email" autocomplete="username" required></div><div class="field" style="margin-top:13px"><label for="admin-password">Demo password</label><input id="admin-password" name="password" type="password" autocomplete="current-password" required></div><p id="login-error" class="field-error" style="margin-top:10px"></p><button class="button button-primary button-block" style="margin-top:10px">Log In</button><a class="button button-outline button-block" style="margin-top:10px" href="/" data-link="/">Back to proposal</a></form></main>`;
   }
   function paymentReviewModal(order) {
     if (!paymentModal || paymentModal.id !== order.id) return "";
@@ -793,28 +919,7 @@
     notify(decision === "Demo Review Complete" ? `Demo review for ${id} marked complete. No payment was verified.` : `Demo screenshot for ${id} rejected.`);
   }
   function adminDashboard() {
-    const list = orders().sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const paidOrders = list.filter(order => order.paymentMethod !== "GCash");
-    const today = new Date().toDateString();
-    const todayOrders = paidOrders.filter(order => new Date(order.createdAt).toDateString() === today && order.status !== "Cancelled");
-    const sales = todayOrders.reduce((sum, order) => sum + order.total, 0);
-    const unseen = list.filter(order => order.status === "New" && !read(KEYS.seen, []).includes(order.id));
-    const pendingPayments = list.filter(paymentReviewPending);
-    const delivered = list.filter(order => order.status === "Delivered").length;
-    const preparing = list.filter(order => order.status === "Preparing").length;
-    const out = list.filter(order => order.status === "Out for Delivery").length;
-    const bestSellers = new Map();
-    paidOrders.forEach(order => (order.items || []).forEach(item => bestSellers.set(item.name, (bestSellers.get(item.name) || 0) + (Number(item.quantity) || 0))));
-    const topProducts = [...bestSellers.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const scheduledOrders = list.filter(order => order.orderMode === "Scheduled" && !["Delivered", "Cancelled"].includes(order.status))
-      .sort((a, b) => (scheduleDateTime(a)?.getTime() || Infinity) - (scheduleDateTime(b)?.getTime() || Infinity));
-    const notification = `${unseen.length ? `<div class="alert" style="margin:18px 0"><strong>🔔 New Demo Order</strong><br>${unseen.map(order => `Order #${esc(order.id)} · ${esc(order.customer)} · ${money(order.total)} <button class="button button-outline" style="min-height:32px;padding:5px 9px;font-size:12px" data-action="view-order" data-id="${esc(order.id)}">View Order</button>`).join("<br>")}</div>` : ""}${pendingPayments.length ? `<div class="gcash-admin-notice"><strong>Demo screenshots awaiting simulated review (${pendingPayments.length}) · No payment was made</strong><br>${pendingPayments.map(order => `Order #${esc(order.id)} · ${esc(order.customer)} · ${money(order.total)} <button class="button button-outline" style="min-height:32px;padding:5px 9px;font-size:12px" data-action="view-order" data-id="${esc(order.id)}">Review sample</button>`).join("<br>")}</div>` : ""}`;
-    const recent = list.slice(0, 5);
-    const scheduledSection = `<section class="panel" style="margin-top:22px"><div class="section-heading"><h2 style="font-size:24px">Scheduled Demo Orders</h2><a href="/admin/orders" data-link="/admin/orders">Manage orders →</a></div>${scheduledOrders.length ? scheduledOrders.map(order => `<article class="admin-order-card"><div class="admin-order-head"><div><strong>Demo #${esc(order.id)} · ${esc(order.customer)}</strong><div class="small muted">${esc(formatScheduleShortDate(order.scheduledDate))} · ${esc(formatScheduleTime(order.scheduledTime))}</div></div><span class="status-badge">${esc(demoOrderStatusLabel(order))}</span></div><p class="small muted" style="margin:8px 0">${esc(order.orderType)} · ${esc(order.paymentMethod)} · demo total ${money(order.total)}</p><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">View demo details</button>${orderActionButtons(order).map(([status,label]) => `<button class="button ${status==="Cancelled"?"button-danger":"button-primary"}" data-action="set-status" data-id="${esc(order.id)}" data-status="${esc(status)}">${label}</button>`).join("")}</article>`).join("") : `<p class="muted">No scheduled demo orders yet.</p>`}</section>`;
-    adminLayout(`<div class="eyebrow">Overview · <span class="badge">SIMULATED DEMO DATA</span></div><h1 style="font-size:40px">Dashboard</h1><p class="muted">All orders and totals here are browser-only examples. GCash demo review orders are excluded from sales and product analytics.</p>${notification}
-      <div class="stat-grid">${[["New Demo Orders",list.filter(o=>o.status==="New").length],["Preparing (demo)",preparing],["Out for Delivery (demo)",out],["Completed (demo)",delivered],["Today's Demo Sales",money(sales)]].map(([label,value]) => `<div class="stat-card"><span>${label}</span><strong>${value}</strong></div>`).join("")}</div>
-      ${scheduledSection}<div class="two-col" style="margin-top:22px"><section class="panel"><div class="section-heading"><h2 style="font-size:24px">Recent Demo Orders</h2><a href="/admin/orders" data-link="/admin/orders">All demo orders →</a></div>${recent.length ? recent.map(order => `<div class="admin-order-card"><div class="admin-order-head"><strong>Demo #${esc(order.id)} · ${esc(order.customer)}</strong><span class="status-badge">${esc(demoOrderStatusLabel(order))}</span></div><p class="small muted" style="margin:8px 0">Demo total ${money(order.total)} · ${esc(scheduleOrderType(order))} · ${new Date(order.createdAt).toLocaleString()}</p><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">View demo details</button></div>`).join("") : `<div class="empty-state">No demo orders yet. Place one from the proposal website walkthrough.</div>`}</section>
-      <section class="panel"><h2 style="font-size:24px">Demo Analytics</h2><p>Orders today <strong>${todayOrders.length}</strong></p><p>Non-GCash demo totals (not revenue) <strong>${money(sales)}</strong></p><p>Completed demo orders <strong>${delivered}</strong></p><p>Delivery demos <strong>${list.filter(o=>o.orderType==="Delivery").length}</strong></p><p>Pickup demos <strong>${list.filter(o=>o.orderType==="Pickup").length}</strong></p><h3>Demo product counts</h3>${topProducts.length ? `<ol>${topProducts.map(([name,quantity]) => `<li>${esc(name)} — ${quantity} demo order(s)</li>`).join("")}</ol>` : `<p class="muted">No demo orders yet.</p>`}<p class="small muted">No values here represent real sales, customers, or business performance.</p></section></div>`, "Dashboard");
+    adminLayout(`<div class="eyebrow">Messenger-first ordering</div><h1 style="font-size:40px">Dashboard</h1><div class="demo-payment-callout"><strong>Orders placed through Facebook Messenger are received in Messenger, not automatically in this dashboard. Confirm orders directly with customers through Messenger.</strong></div><p class="muted">This website does not read Facebook messages, record orders, show an inbox, synchronize conversations, or provide order tracking. No order activity or sales statistics are available here.</p><div class="two-col" style="margin-top:22px"><section class="panel"><h2 style="font-size:24px">Checkout setup</h2><p>Enter and test the official Messenger conversation URL, then confirm enabled payment and fulfillment options.</p><a class="button button-primary" href="/admin/settings" data-link="/admin/settings">Ordering & Checkout Settings</a></section><section class="panel"><h2 style="font-size:24px">Menu management</h2><p>Manage menu item prices, availability, categories, and owner-approved product photos in this browser.</p><a class="button button-outline" href="/admin/menu" data-link="/admin/menu">Open Menu Management</a></section></div><div class="panel" style="margin-top:18px"><h2 style="font-size:22px">Browser-local limitations</h2><p>Settings and menu edits are stored in this browser only. They are not shared with other devices or public visitors, and this static demo has no authentication. Do not enter real customer information or secrets.</p></div>`, "Dashboard");
   }
   function adminOrders() {
     const allOrders = orders().sort((a, b) => {
@@ -861,22 +966,32 @@
   }
   function adminSettings() {
     const cfg = settings();
-    adminLayout(`<div class="eyebrow">Proposal configuration</div><h1 style="font-size:40px">Business Settings</h1><p class="muted">Demo-only settings saved in local storage. Confirm all details with the owner before production.</p><form id="business-settings-form" class="panel"><div class="form-grid"><div class="field"><label for="business-name">Business name</label><input id="business-name" name="businessName" value="${esc(cfg.businessName)}"></div><div class="field"><label for="tagline">Tagline</label><input id="tagline" name="tagline" value="${esc(cfg.tagline)}"></div><div class="field"><label for="business-phone">Contact information</label><input id="business-phone" name="phone" value="${esc(cfg.phone)}" placeholder="Add confirmed contact number"></div><div class="field"><label for="business-hours">Business hours</label><input id="business-hours" name="hours" value="${esc(cfg.hours)}"></div><div class="field"><label for="facebook-url">Facebook page URL</label><input id="facebook-url" name="facebook" type="url" value="${esc(cfg.facebook)}"></div><div class="field"><label for="business-address">Address</label><input id="business-address" name="address" value="${esc(cfg.address)}"></div><div class="field"><label>Logo</label><input value="/images/eli-icon.jpg" readonly></div><label class="choice-card"><input type="checkbox" name="deliveryEnabled" ${cfg.deliveryEnabled?"checked":""}> Delivery available</label><label class="choice-card"><input type="checkbox" name="pickupEnabled" ${cfg.pickupEnabled?"checked":""}> Pickup available</label></div><button class="button button-primary" style="margin-top:18px">Save Business Settings</button></form><section class="panel"><div class="eyebrow">Demo reset</div><h2 style="font-size:25px">Reset Demo Data</h2><p class="muted">Restore the official menu and remove demo orders, cart contents, and saved settings.</p><button class="button button-danger" data-action="reset-demo">Reset Demo Data</button></section>`, "Business Settings");
+    adminLayout(`<div class="eyebrow">Proposal configuration</div><h1 style="font-size:40px">Ordering & Checkout Settings</h1><div class="demo-payment-callout"><strong>Browser-only demo settings</strong><br>Changes are saved only in this browser. They do not update the deployed site for other visitors. Do not enter real customer or payment information.</div><p class="muted">All business policies below require owner confirmation. To configure one shared Messenger destination for public customers, update the site's public configuration or add a real shared backend before production.</p><form id="business-settings-form" class="panel">
+      <h2 style="font-size:25px">Messenger destination</h2><div class="field"><label for="messenger-url">Official Messenger conversation URL</label><input id="messenger-url" name="messengerUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://m.me/your-confirmed-page" value="${esc(cfg.messengerUrl)}"><p class="small muted">Enter an owner-confirmed https://m.me/, Messenger, or Facebook messages URL. Checkout will never send a message automatically.</p></div>
+      <h2 style="font-size:25px;margin-top:24px">Business information (unconfirmed)</h2><div class="form-grid"><div class="field"><label for="business-name">Business name</label><input id="business-name" name="businessName" maxlength="100" value="${esc(cfg.businessName)}"></div><div class="field"><label for="tagline">Tagline</label><input id="tagline" name="tagline" maxlength="160" value="${esc(cfg.tagline)}"></div><div class="field"><label for="business-phone">Contact number</label><input id="business-phone" name="phone" maxlength="40" value="${esc(cfg.phone)}" placeholder="Owner-confirmed number"></div><div class="field"><label for="facebook-url">Facebook page URL</label><input id="facebook-url" name="facebook" type="url" value="${esc(cfg.facebook)}" placeholder="Owner-confirmed page URL"></div><div class="field"><label for="business-address">Proposed locality / pickup location</label><input id="business-address" name="address" maxlength="160" value="${esc(cfg.address)}"></div><div class="field"><label for="delivery-areas">Delivery coverage / barangays</label><input id="delivery-areas" name="deliveryAreas" maxlength="240" value="${esc(cfg.deliveryAreas)}" placeholder="Owner-confirmed service area"></div></div>
+      <h2 style="font-size:25px;margin-top:24px">Fulfillment & fees (unconfirmed)</h2><div class="form-grid"><label class="choice-card"><input type="checkbox" name="deliveryEnabled" ${cfg.deliveryEnabled?"checked":""}> Show delivery at checkout</label><label class="choice-card"><input type="checkbox" name="pickupEnabled" ${cfg.pickupEnabled?"checked":""}> Show pickup at checkout</label><div class="field"><label for="minimum-order">Minimum order (₱; 0 = none)</label><input id="minimum-order" name="minimumOrder" type="number" min="0" step="1" value="${cfg.minimumOrder}"></div><div class="field"><label for="delivery-fee">Delivery fee (₱)</label><input id="delivery-fee" name="deliveryFee" type="number" min="0" step="1" value="${cfg.deliveryFee === null ? "" : cfg.deliveryFee}"></div><label class="choice-card"><input type="checkbox" name="deliveryFeeConfirmed" ${cfg.deliveryFeeConfirmed?"checked":""}> Owner confirmed this delivery fee</label><div class="field"><label for="free-threshold">Free delivery threshold (₱; 0 = off)</label><input id="free-threshold" name="freeDeliveryThreshold" type="number" min="0" step="1" value="${cfg.freeDeliveryThreshold}"></div></div>
+      <h2 style="font-size:25px;margin-top:24px">Payment preferences</h2><p class="small muted">These are message preferences only. This website does not process, receive, or verify payments.</p><div class="choice-row"><label class="choice-card"><input type="checkbox" name="gcashEnabled" ${cfg.gcashEnabled?"checked":""}> GCash (payment instructions confirmed in Messenger)</label><label class="choice-card"><input type="checkbox" name="codEnabled" ${cfg.codEnabled?"checked":""}> Cash on Delivery</label><label class="choice-card"><input type="checkbox" name="cashOnPickupEnabled" ${cfg.cashOnPickupEnabled?"checked":""}> Cash on Pickup</label><label class="choice-card"><input type="checkbox" name="codScheduledEnabled" ${cfg.codScheduledEnabled?"checked":""}> Allow Cash on Delivery for scheduled orders</label></div>
+      <h2 style="font-size:25px;margin-top:24px">Scheduling (unconfirmed hours)</h2><div class="form-grid"><label class="choice-card"><input type="checkbox" name="scheduledOrdersEnabled" ${cfg.scheduledOrdersEnabled?"checked":""}> Allow customers to request scheduled orders</label><div class="field"><label for="max-schedule-days">Maximum days ahead (1–30)</label><input id="max-schedule-days" name="maxScheduleDays" type="number" min="1" max="30" step="1" value="${cfg.maxScheduleDays}"></div><div class="field"><label for="business-open-time">Opening time</label><input id="business-open-time" name="businessOpenTime" type="time" value="${esc(cfg.businessOpenTime)}" required></div><div class="field"><label for="business-close-time">Closing time</label><input id="business-close-time" name="businessCloseTime" type="time" value="${esc(cfg.businessCloseTime)}" required></div></div>
+      <p id="settings-error" class="field-error" role="alert" hidden></p><button class="button button-primary" style="margin-top:20px">Save Ordering Settings</button></form><section class="panel"><div class="eyebrow">Menu and browser data</div><h2 style="font-size:25px">Browser-local limitations</h2><p class="muted">Menu edits and these settings remain in this browser only. The site has no admin authentication, shared database, Messenger inbox, or order tracking. Avoid storing secrets and real customer information.</p><button class="button button-danger" data-action="reset-demo">Reset Local Demo Settings</button></section>`, "Ordering & Checkout Settings");
   }
   function renderAdmin() {
     const current = path();
-    if (current === "/admin" || current === "/admin/") { adminLogin(); return; }
-    if (!read(KEYS.admin, false)) { history.replaceState({}, "", "/admin"); adminLogin(); return; }
-    if (current === "/admin/dashboard") adminDashboard();
-    else if (current === "/admin/orders") adminOrders();
-    else if (current.startsWith("/admin/orders/")) adminOrderDetail(decodeURIComponent(current.slice("/admin/orders/".length)));
+    if (current === "/admin" || current === "/admin/") { history.replaceState({}, "", "/admin/dashboard"); adminDashboard(); }
+    else if (current === "/admin/orders" || current.startsWith("/admin/orders/")) { history.replaceState({}, "", "/admin/dashboard"); adminDashboard(); }
     else if (current === "/admin/menu") adminMenu();
-    else if (current === "/admin/delivery") adminDelivery();
+    else if (current === "/admin/delivery") { history.replaceState({}, "", "/admin/settings"); adminSettings(); }
     else if (current === "/admin/settings") adminSettings();
     else adminDashboard();
   }
   function render() {
-    if (path().startsWith("/admin")) renderAdmin();
+    const current = path();
+    if (renderedPath === "/checkout" && current !== "/checkout") {
+      checkoutDraft = {};
+      checkoutErrors = {};
+      messengerResult = null;
+    }
+    renderedPath = current;
+    if (current.startsWith("/admin")) renderAdmin();
     else renderPublic();
   }
   function addToCart(id, quantity = 1, specialInstructions = "") {
@@ -887,9 +1002,7 @@
     const next = cart();
     next[id] = (Number(next[id]) || 0) + quantity;
     if (specialInstructions) {
-      const notes = read(KEYS.notes, {});
-      notes[id] = specialInstructions;
-      write(KEYS.notes, notes);
+      cartNotes[id] = specialInstructions;
     }
     if (saveCart(next)) {
       notify(`${item.name} added to cart.`);
@@ -903,9 +1016,7 @@
     const quantity = (Number(next[id]) || 0) + change;
     if (quantity <= 0) {
       delete next[id];
-      const notes = read(KEYS.notes, {});
-      delete notes[id];
-      write(KEYS.notes, notes);
+      delete cartNotes[id];
     }
     else if (quantity > 99) { notify("Maximum quantity per item is 99."); return; }
     else next[id] = quantity;
@@ -993,15 +1104,21 @@
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const { action, id } = button.dataset;
-    if (action === "select-scheduled") {
+    if (action === "place-order-messenger") {
+      void placeOrderViaMessenger(button);
+    } else if (action === "copy-order-message") {
+      if (!messengerResult?.message) { notify("Prepare your checkout message before copying it."); return; }
+      void copyOrderMessage(messengerResult.message).then(copied => notify(copied ? "Order details copied. Paste and send them in Messenger." : "Copy was unavailable. Select the message and copy it manually."));
+    } else if (action === "select-scheduled") {
       const form = document.getElementById("checkout-form");
-      if (form) {
-        form.querySelector('input[name="orderMode"][value="Scheduled"]').checked = true;
+      const scheduledOption = form?.querySelector('input[name="orderMode"][value="Scheduled"]');
+      if (scheduledOption) {
+        scheduledOption.checked = true;
         saveCheckoutDraft(form);
         render();
         document.querySelector(".schedule-fields")?.scrollIntoView({ behavior: "smooth", block: "center" });
       } else {
-        go("/menu");
+        notify("Scheduled orders are disabled in this demo's settings.");
       }
     } else if (action === "toggle-nav") {
       const nav = document.getElementById("main-nav");
@@ -1020,7 +1137,7 @@
     } else if (action === "cart-qty") updateCart(id, Number(button.dataset.change));
     else if (action === "remove-cart") updateCart(id, -(Number(cart()[id]) || 0));
     else if (action === "clear-cart") {
-      if (confirm("Clear all items from your cart?")) { saveCart({}); write(KEYS.notes, {}); render(); }
+      if (confirm("Clear all items from your cart?")) { saveCart({}); cartNotes = {}; render(); }
     } else if (action === "filter-category" || action === "category-link") {
       activeCategory = button.dataset.category;
       if (action === "category-link") history.pushState({}, "", "/menu");
@@ -1030,34 +1147,6 @@
       activeCategory = "All";
       history.replaceState({}, "", "/menu");
       render();
-    } else if (action === "edit-order") go("/cart");
-    else if (action === "view-order") go(`/admin/orders/${encodeURIComponent(id)}`);
-    else if (action === "set-status") setOrderStatus(id, button.dataset.status);
-    else if (action === "review-payment-proof") {
-      if (!read(KEYS.admin, false)) { go("/admin"); return; }
-      paymentModal = { id, mode: "proof" };
-      render();
-    } else if (action === "open-payment-verify" || action === "open-payment-reject") {
-      if (!read(KEYS.admin, false)) { go("/admin"); return; }
-      paymentModal = { id, mode: action === "open-payment-verify" ? "verify" : "reject" };
-      render();
-    } else if (action === "confirm-payment-verify") reviewGcashPayment(id, "Demo Review Complete");
-    else if (action === "close-payment-modal") {
-      paymentModal = null;
-      render();
-    } else if (action === "remove-gcash-proof") {
-      if (gcashScreenshotPreviewUrl) URL.revokeObjectURL(gcashScreenshotPreviewUrl);
-      gcashScreenshotPreviewUrl = "";
-      gcashScreenshotFile = null;
-      const input = document.getElementById("gcash-proof");
-      if (input) input.value = "";
-      const preview = document.getElementById("gcash-proof-preview");
-      if (preview) preview.innerHTML = `<p class="small muted">Your selected sample preview will appear here. It is not shown on public tracking pages.</p>`;
-    }
-    else if (action === "admin-logout") {
-      paymentModal = null;
-      write(KEYS.admin, false);
-      go("/admin");
     } else if (action === "add-product-form") showProductForm();
     else if (action === "edit-product") showProductForm(products().find(item => item.id === id));
     else if (action === "cancel-product-form") {
@@ -1071,11 +1160,14 @@
         const next = cart(); delete next[id]; saveCart(next); render();
       }
     } else if (action === "reset-demo") {
-      if (confirm("Reset all demo orders, cart data, menu changes and settings?")) {
-        Object.values(KEYS).forEach(key => localStorage.removeItem(key));
-        localStorage.removeItem("elisCrunch.checkoutDraft");
-        notify("Demo data reset.");
-        go("/admin");
+      if (confirm("Reset browser-local settings and menu changes? Your cart will be cleared too.")) {
+        [KEYS.settings, KEYS.products, KEYS.cart].forEach(key => localStorage.removeItem(key));
+        cartNotes = {};
+        checkoutDraft = {};
+        checkoutErrors = {};
+        messengerResult = null;
+        notify("Local demo settings and menu data reset.");
+        go("/admin/dashboard");
       }
     }
   });
@@ -1169,33 +1261,8 @@
   });
   document.addEventListener("submit", event => {
     const form = event.target;
-    if (form.id === "checkout-form") { event.preventDefault(); placeOrder(form); }
-    else if (form.id === "gcash-payment-form") { event.preventDefault(); void submitGcashPayment(form); }
-    else if (form.id === "reject-payment-form") {
+    if (form.id === "checkout-form") {
       event.preventDefault();
-      const reason = String(new FormData(form).get("reason") || "").trim();
-      if (!reason) {
-        const error = document.getElementById("payment-rejection-error");
-        error.textContent = "Enter a reason to explain why this payment was rejected.";
-        error.hidden = false;
-        return;
-      }
-      reviewGcashPayment(form.dataset.orderId, "Demo Review Rejected", reason);
-    }
-    else if (form.id === "track-form") {
-      event.preventDefault();
-      orderSearchResult = new FormData(form).get("orderId").trim();
-      history.pushState({}, "", `/track-order/${encodeURIComponent(orderSearchResult)}`);
-      render();
-    } else if (form.id === "admin-login") {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(form).entries());
-      if (data.email === "demo@eliscrunch.local" && data.password === "demo123") {
-        write(KEYS.admin, true);
-        go("/admin/dashboard");
-      } else {
-        document.getElementById("login-error").textContent = "Those demo credentials don't match. Please try again.";
-      }
     } else if (form.getAttribute("id") === "product-form") {
       event.preventDefault();
       void persistProductForm(form);
@@ -1209,8 +1276,70 @@
     } else if (form.id === "business-settings-form") {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(form).entries());
-      write(KEYS.settings, { ...settings(), ...data, deliveryEnabled: form.elements.deliveryEnabled.checked, pickupEnabled: form.elements.pickupEnabled.checked });
-      notify("Demo business settings saved.");
+      const error = document.getElementById("settings-error");
+      const showError = message => {
+        error.textContent = message;
+        error.hidden = false;
+        error.scrollIntoView({ behavior: "smooth", block: "center" });
+      };
+      const messengerUrl = String(data.messengerUrl || "").trim();
+      if (messengerUrl && !isValidMessengerUrl(messengerUrl)) { showError("Enter an owner-confirmed https://m.me/, Messenger, or Facebook messages URL."); return; }
+      const facebook = String(data.facebook || "").trim();
+      if (facebook) {
+        try {
+          const parsed = new URL(facebook);
+          if (parsed.protocol !== "https:" || !["facebook.com", "www.facebook.com"].includes(parsed.hostname.toLowerCase())) throw new Error("invalid");
+        } catch {
+          showError("Enter a valid https://www.facebook.com/ page URL or leave it blank."); return;
+        }
+      }
+      const openTime = String(data.businessOpenTime || "");
+      const closeTime = String(data.businessCloseTime || "");
+      if (!validClockTime(openTime) || !validClockTime(closeTime) || clockMinutes(openTime) >= clockMinutes(closeTime)) { showError("Choose valid opening and closing times; closing must be later than opening."); return; }
+      const maxScheduleDays = Number(data.maxScheduleDays);
+      if (!Number.isInteger(maxScheduleDays) || maxScheduleDays < 1 || maxScheduleDays > 30) { showError("Maximum scheduling range must be a whole number from 1 to 30 days."); return; }
+      const minimumOrder = Number(data.minimumOrder);
+      const deliveryFee = data.deliveryFee === "" ? null : Number(data.deliveryFee);
+      const freeDeliveryThreshold = Number(data.freeDeliveryThreshold);
+      if (!Number.isFinite(minimumOrder) || minimumOrder < 0 || !Number.isFinite(freeDeliveryThreshold) || freeDeliveryThreshold < 0 || (deliveryFee !== null && (!Number.isFinite(deliveryFee) || deliveryFee < 0))) {
+        showError("Minimum order, delivery fee, and free-delivery threshold must be valid non-negative amounts."); return;
+      }
+      const formatTime = value => {
+        const [hour, minute] = value.split(":").map(Number);
+        const date = new Date(2000, 0, 1, hour, minute);
+        return date.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit" });
+      };
+      const next = {
+        ...settings(),
+        messengerUrl,
+        businessName: String(data.businessName || "").trim(),
+        tagline: String(data.tagline || "").trim(),
+        phone: String(data.phone || "").trim(),
+        facebook,
+        address: String(data.address || "").trim(),
+        deliveryAreas: String(data.deliveryAreas || "").trim(),
+        deliveryEnabled: form.elements.deliveryEnabled.checked,
+        pickupEnabled: form.elements.pickupEnabled.checked,
+        minimumOrder,
+        deliveryFee,
+        deliveryFeeConfirmed: Boolean(form.elements.deliveryFeeConfirmed.checked && deliveryFee !== null),
+        freeDeliveryThreshold,
+        gcashEnabled: form.elements.gcashEnabled.checked,
+        codEnabled: form.elements.codEnabled.checked,
+        cashOnPickupEnabled: form.elements.cashOnPickupEnabled.checked,
+        codScheduledEnabled: form.elements.codScheduledEnabled.checked,
+        scheduledOrdersEnabled: form.elements.scheduledOrdersEnabled.checked,
+        maxScheduleDays,
+        businessOpenTime: openTime,
+        businessCloseTime: closeTime,
+        hours: `${formatTime(openTime)}–${formatTime(closeTime)} (sample; owner confirmation required)`
+      };
+      if (!next.businessName) { showError("Enter the business name."); return; }
+      if (next.deliveryFeeConfirmed === false && form.elements.deliveryFeeConfirmed.checked) {
+        showError("Enter a delivery fee before marking it owner-confirmed."); return;
+      }
+      if (!write(KEYS.settings, next)) return;
+      notify("Browser-local ordering settings saved. Public visitors on other devices will not receive these changes.");
       render();
     }
   });
@@ -1224,7 +1353,7 @@
   });
   window.addEventListener("popstate", render);
   window.addEventListener("storage", event => {
-    if ([KEYS.orders, KEYS.products, KEYS.settings, KEYS.cart].includes(event.key)) render();
+    if ([KEYS.products, KEYS.settings, KEYS.cart].includes(event.key)) render();
   });
 
   render();

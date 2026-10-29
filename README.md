@@ -1,49 +1,45 @@
 # Eli's Crunch proposal website
 
-This is a frontend-only proposal demo. Menu data is centralized in `data.js`; cart, demo orders, settings, product image uploads, and sample payment screenshots are stored in the browser's local storage. Nothing is sent to Eli's Crunch, no real payment is processed, and no delivery or customer notification is connected.
+This is a static, frontend-only proposal for a menu and Messenger-first ordering experience. It does not have a server-side order system, Messenger integration, admin authentication, shared database, payment gateway, or order tracking.
 
-## Important demo limitations
+## Messenger ordering
 
-- The GCash screen is a simulated screenshot-review walkthrough. It has no GCash account, gateway, transfer, or payment verification. Do not send money, use real sender/customer details, or upload a real receipt.
-- The displayed sample hours (8 AM-9 PM), proposed Nabunturan locality, delivery fee, delivery coverage, and delivery/pickup options are unconfirmed examples. The owner must confirm business hours, pickup availability and location, coverage, fees, contact information, and Facebook details before these can be presented as business policies.
-- The demo login is public and client-side only. It is not authentication. Never reuse its credentials or store real customer or payment information in this project.
-- Browser local storage is not secure, is limited to the current browser/device, and does not synchronize between customers and the admin. Payment screenshots are saved locally and are unsuitable for production.
-- Product and hero photography includes temporary demo placeholders, not verified photos of Eli's Crunch portions. The owner can provide or approve actual product photos for replacement. The About page and footer disclose this.
-- Dashboard totals and statuses are illustrative browser-only demo values; GCash walkthrough orders are excluded from sales/product analytics. They are not real business performance.
+1. Browse the menu, add items, and open checkout.
+2. Enter customer and fulfillment details, choose a payment preference, and review the generated order message.
+3. Use the button to open the configured Facebook/Messenger conversation. The browser may copy the message to the clipboard; if not, use **Copy Order Details** or select the visible message and copy it manually.
+4. Paste the message into Messenger and press **Send** yourself. Opening Messenger or copying the message does not send an order. The order is not accepted or confirmed until Eli's Crunch replies.
 
-## Owner presentation walkthrough
+The checkout message is generated from the current product catalog and cart. It is not saved as an order or placed in a URL. Customer checkout details stay in page memory, are cleared when leaving checkout, and are included in the message only when the customer chooses to copy or send it. Special instructions are also memory-only. Refreshing the page clears both; only product IDs and quantities remain in the browser-stored cart. Do not use real customer data during a proposal presentation.
 
-Use fictional data throughout. The public demo login details below are intentionally visible to anyone who can access the site.
+## Demo configuration and limitations
 
-1. Open `/menu`, add a product, and continue through `/cart` to checkout.
-2. Use a made-up name, phone number, address, and barangay. These values remain in this browser.
-3. Choose Delivery or Pickup as a demonstration only. Choose GCash to show the simulated payment-review flow.
-4. On the demo payment page, enter a fictional reference such as `DEMO-REF-001` and sender such as `Demo Sender`. Select a harmless sample image with no real payment or personal information, then submit it.
-5. Open `/admin` in the same browser and sign in:
-   - Email: `demo@eliscrunch.local`
-   - Password: `demo123`
-6. Open **Orders** and select the demo order. The screenshot is visible only in the local admin demo; use **Complete Demo Review** to advance the simulated state. This does not verify a transfer, confirm funds, or accept a real business order. The reject path can also be demonstrated with a fictional reason.
-7. Return to the confirmation page or open **Track Order** and enter the shown demo order number. Confirm the review status changes to **Demo review complete (simulated)**. No screenshot is exposed on public tracking pages.
-8. Use **Business Settings → Reset Demo Data** after the presentation to clear browser-saved orders, screenshot, cart, and settings. This does not clear other browsers or devices.
+- The official Messenger conversation URL is intentionally blank until the owner supplies and confirms it. Do not invent a URL or present a test destination as the business page.
+- **Ordering & Checkout Settings** is available at `/admin/settings`; the browser-only tools are also reachable at `/admin`. There is no password prompt because static client-side passwords are not security. Do not put credentials, secrets, or real customer information in this project.
+- Settings, product edits, and uploaded product images are stored in the current browser's local storage. They do not update the deployed static files, synchronize to another browser/device, or become available to public visitors. A shared production configuration requires changing the deployed public config or building a secured shared backend.
+- Payment selections (including GCash, COD, and cash on pickup) are preferences included in the message only. This website does not accept or verify payments, provide GCash payment details, or claim a transaction succeeded. The owner must confirm available methods and provide payment instructions through Messenger.
+- Hours, address/locality, delivery availability, delivery fee, delivery coverage, pickup availability/location, contact details, and Facebook page are unconfirmed proposal values. Confirm them with the owner before presenting them as business policy. Unconfirmed delivery charges and the final total are explicitly left for confirmation in Messenger.
+- Messenger conversations are not imported into a dashboard. There is no website order inbox, order status workflow, customer tracking, or sales analytics.
+- On the first load after this migration, obsolete browser-only demo orders, payment-proof drafts, and saved special-instruction notes are removed from local storage.
+- Food images shown in this demo are for presentation purposes and may be replaced with official Eli's Crunch product photos supplied or approved by the owner.
 
-This is a static proposal: use the same browser for checkout, admin review, and tracking. Do not create real customer data or real payment screenshots for the demo.
+## Owner setup before production
+
+Ask the owner to provide or confirm:
+
+- The official Facebook/Messenger conversation URL
+- High-resolution, owner-approved product photos and logo files
+- Business hours and preferred product descriptions
+- Delivery areas, fees, delivery availability, and pickup availability/location
+- Contact details and Facebook page information
+- Available payment methods and the intended secure payment process
+
+The production site should replace temporary images and proposal text with owner-approved assets and policies. A real order inbox, payment processing, shared settings, customer tracking, or authenticated admin area requires a secure backend and appropriate privacy/security review; this static proposal does not provide those features.
 
 ## Image management
 
-Product image assignments and `imageSource` metadata are centralized in `data.js`: `official` identifies supplied or owner-approved photos, while `temporary-demo` identifies temporary fetched references. Temporary image source and license notes are in `images/products/image-sources.json`.
+Product image assignments and `imageSource` metadata are centralized in `data.js`: `official` identifies owner-supplied or owner-approved photos, while `temporary-demo` identifies temporary presentation imagery. Product cards and the homepage slideshow reuse the centralized product data.
 
-To replace a placeholder, upload an owner-supplied/approved JPG, PNG, or WebP photo in **Admin → Menu Management**, or update its centralized image path and source in `data.js`. Product cards, checkout, and the homepage slideshow reuse this menu data. Admin uploads are stored in this browser's local storage, not on a server.
-
-Before production approval, ask the owner to provide or confirm:
-
-- High-resolution actual product photos and approval for their use
-- Current logo files
-- GCash details and the intended secure payment process
-- Business hours
-- Delivery areas and fees
-- Pickup availability and pickup location
-- Contact information and Facebook page
-- Preferred product descriptions
+In the browser-only proposal, uploaded product photos and menu edits are saved only in that browser. For the deployed public menu, update the centralized assets and product data in the project and redeploy. Replace a temporary image path and mark it `official` only after the owner supplies or approves the actual photo.
 
 ## Run locally
 
@@ -55,14 +51,6 @@ npm.cmd start
 
 Then open `http://localhost:4173`.
 
-## Demo admin
-
-- URL: `/admin`
-- Email: `demo@eliscrunch.local`
-- Password: `demo123`
-
-These are public demo credentials, not secrets. Authentication is frontend-only and can be bypassed; do not use them for a real admin account. Never enter real customer information or payment details.
-
 ## Deployment
 
-The included `vercel.json` explicitly selects Vercel's **Other** framework preset, disables build/install commands, serves the project root as static output, and rewrites application routes to `index.html` for direct visits and browser refreshes. The matching Vercel project settings should use the repository root as the Root Directory, leave Build and Install Commands empty, and use `.` as the Output Directory. Do not select the Node.js framework: `server.js` is only the local development server. The `_redirects` file enables equivalent history-route fallback on Netlify. The included Node server serves the app shell for local development.
+The included `vercel.json` explicitly selects Vercel's **Other** framework preset, disables build/install commands, serves the project root as static output, and rewrites application routes to `index.html` for direct visits and browser refreshes. The matching Vercel project settings should use the repository root as the Root Directory, leave Build and Install Commands empty, and use `.` as the Output Directory. Do not select the Node.js framework: `server.js` is only the local development server. The `_redirects` file enables equivalent history-route fallback on Netlify.
