@@ -303,7 +303,7 @@
     const cfg = settings();
     return `<footer class="footer"><div class="container"><div class="footer-grid">
       <div><a class="brand" href="/" data-link="/"><img src="/images/eli-icon.jpg" alt=""><span>${esc(cfg.businessName)}</span></a><p style="margin-top:14px">${esc(cfg.tagline)}</p><p>Proposed location: ${esc(cfg.address)}<br>Sample hours: ${esc(cfg.hours)}</p></div>
-      <div><strong>Explore</strong><div class="footer-links" style="margin-top:14px">${link("/", "Home")}${link("/menu", "Menu")}${link("/contact", "Contact")}</div></div>
+      <div><strong>Explore</strong><div class="footer-links" style="margin-top:14px">${link("/", "Home")}${link("/menu", "Menu")}</div></div>
       <div><strong>More</strong><div class="footer-links" style="margin-top:14px">${link("/about", "About")}${link("/contact", "Contact")}${link("/faq", "FAQ")}${cfg.facebook ? `<a href="${esc(cfg.facebook)}" target="_blank" rel="noopener noreferrer">Facebook</a>` : ""}</div></div>
     </div><div class="footer-bottom">© ${new Date().getFullYear()} ${esc(cfg.businessName)} · Proposal demo only · Food images are presentation placeholders and may be replaced by owner-approved photos · Hours, delivery coverage and fees require confirmation · No real payment is processed.</div></div></footer>`;
   }
@@ -338,7 +338,7 @@
     const heroProducts = ["six-piece-wings", "pasta-carbonara", "rice99-chicken-katsu", "rice-meal-pork-sisig"]
       .map(id => catalogue.find(item => item.id === id))
       .filter(Boolean);
-    return `<section class="hero"><div class="container hero-grid"><div class="eyebrow">Proposed service area: ${esc(settings().address)}</div>
+    return `<section class="hero"><div class="container hero-grid"><div class="hero-copy"><div class="eyebrow">Proposed service area: ${esc(settings().address)}</div>
       <h1>Good Food.<br><span>Big Smiles.</span><br>Delivered.</h1>
       <p class="lead">Explore the Eli's Crunch menu and preview a proposed delivery and pickup ordering experience.</p>
       <div class="hero-actions"><a class="button button-primary" href="/menu" data-link="/menu">${orderCtaLabel()}</a><a class="button button-outline" href="/menu" data-link="/menu">View Menu</a></div>
@@ -379,7 +379,7 @@
     const item = products().find(product => product.id === id);
     if (!item) return `<section class="container section"><div class="empty-state"><h1>Product not found</h1><a class="button button-primary" href="/menu" data-link="/menu">Back to menu</a></div></section>`;
     return `<section class="container section"><div class="two-col"><div class="panel detail-image-panel"><img class="detail-product-image" src="${esc(item.image)}" alt="${esc(productImageAlt(item))}" data-image-source="${esc(item.imageSource || "temporary-demo")}" onerror="this.onerror=null;this.src='/images/eli-icon.jpg'"></div>
-      <div class="panel"><div class="eyebrow">${esc(item.category)}</div><h1 style="font-size:clamp(34px,5vw,52px)">${esc(item.name)}</h1><div class="product-price" style="font-size:25px">${money(item.price)}</div><p class="muted" style="margin-top:18px">${esc(productImageAlt(item))}; the actual dish may look different.</p>
+      <div class="panel"><div class="eyebrow">${esc(item.category)}</div><h1 class="detail-title">${esc(item.name)}</h1><div class="product-price" style="font-size:25px">${money(item.price)}</div><p class="muted" style="margin-top:18px">${esc(productImageAlt(item))}; the actual dish may look different.</p>
       ${item.available === false ? `<p class="sold-out">SOLD OUT</p>` : `<div class="field" style="max-width:180px;margin:20px 0"><label for="detail-qty">Quantity</label><div class="qty-control"><button type="button" data-action="detail-qty" data-change="-1" aria-label="Decrease quantity">−</button><span id="detail-qty">${detailQuantity}</span><button type="button" data-action="detail-qty" data-change="1" aria-label="Increase quantity">+</button></div></div>
       <div class="field"><label for="special-instructions">Special instructions (optional)</label><textarea id="special-instructions" placeholder="Add a note for your order"></textarea></div>
       <button class="button button-primary button-block" style="margin-top:16px" data-action="add-cart" data-id="${esc(item.id)}" data-detail="true">Add to Cart — ${money(item.price * detailQuantity)}</button>`}
@@ -427,7 +427,34 @@
     const paymentNotice = paymentOptions.length ? "" : `<p class="alert">No payment methods are currently enabled for this order type. Ask the owner to enable a method in Ordering & Checkout Settings.</p>`;
     const scheduleFields = orderMode === "Scheduled"
       ? `<div class="schedule-fields"><p class="small muted"><strong>Preferred schedule</strong> · ${esc(dateTimeLabel)} · Owner-confirmed hours required.</p><div class="form-grid"><div class="field"><label for="scheduled-date">Preferred date *</label><input id="scheduled-date" name="scheduledDate" type="date" min="${minDate}" max="${maxDate}" value="${esc(scheduledDate)}" required>${error("scheduledDate")}</div><div class="field"><label for="scheduled-time">Preferred time *</label><select id="scheduled-time" name="scheduledTime" required>${availableSlots.map(time => `<option value="${time}" ${time === scheduledTime ? "selected" : ""}>${formatScheduleTime(time)}</option>`).join("")}</select>${error("scheduledTime")}</div></div></div>` : "";
-    const result = messengerResult ? `<div class="messenger-result panel" id="messenger-result" role="status" aria-live="polite"><div class="eyebrow">Next step required</div><h2>Review and send your message</h2><p>${esc(messengerResult.status)}</p><p><strong>Your order is not confirmed until Eli's Crunch replies through Messenger. Please verify your details before sending.</strong></p><label for="order-message">Order details to paste into Messenger</label><textarea id="order-message" readonly rows="18">${esc(messengerResult.message)}</textarea><button class="button button-outline button-block" type="button" data-action="copy-order-message">Copy Order Details</button><p class="small muted">${messengerResult.opened ? "Messenger was opened in a new tab. Paste the copied message into that conversation and press Send." : "Messenger did not open. Copy the message, then open the official Messenger link after configuring it."}</p></div>` : "";
+    const result = messengerResult ? `<div class="messenger-result panel" id="messenger-result" role="status" aria-live="polite">
+      <div class="messenger-result-header">
+        <span class="eyebrow">Next step required</span>
+        <span class="messenger-status-pill">${messengerResult.opened ? "Messenger opened" : "Message ready"}</span>
+      </div>
+      <h2>Review and send your message</h2>
+      <p class="messenger-intro">${esc(messengerResult.status)}</p>
+      <div class="messenger-warning">
+        <strong>Your order is not confirmed until Eli's Crunch replies through Messenger.</strong>
+        Please verify your details before sending.
+      </div>
+
+      <div class="messenger-message-shell">
+        <div class="messenger-message">
+          <div class="message-header">
+            <span class="message-avatar" aria-hidden="true">EC</span>
+            <span><strong>Message draft</strong><small>For Eli's Crunch in Messenger</small></span>
+            <span class="messenger-status-pill">Ready to copy</span>
+          </div>
+          <label for="order-message" class="field-label">Your complete order message</label>
+          <textarea id="order-message" readonly rows="18">${esc(messengerResult.message)}</textarea>
+        </div>
+      </div>
+      <div class="messenger-actions">
+        <button class="button button-primary button-block" type="button" data-action="copy-order-message">Copy Order Details</button>
+      </div>
+      <p class="small muted messenger-note">${messengerResult.opened ? "Messenger was opened in a new tab. Paste the copied message into that conversation and press Send." : "Messenger did not open. Copy the message, then open the official Messenger link after configuring it."}</p>
+    </div>` : "";
     return `<section class="container page-top"><div class="eyebrow">Checkout</div><h1>Review Your Order</h1><p class="lead">Prepare a message for Eli's Crunch. Nothing is sent until you paste and send it in Messenger.</p></section><section class="container section-tight"><form id="checkout-form" novalidate><div class="two-col"><div>
       <div class="panel"><h2 style="font-size:25px">Customer Information</h2><div class="form-grid"><div class="field"><label for="customer-name">Full name *</label><input id="customer-name" name="name" autocomplete="name" value="${esc(prior.name || "")}" required aria-describedby="error-name">${error("name")}</div><div class="field"><label for="customer-phone">Contact number *</label><input id="customer-phone" name="phone" type="tel" autocomplete="tel" value="${esc(prior.phone || "")}" required aria-describedby="error-phone">${error("phone")}</div></div></div>
       <div class="panel"><h2 style="font-size:25px">Fulfillment</h2><div class="choice-row"><label class="choice-card ${config.deliveryEnabled ? "" : "choice-disabled"}"><input type="radio" name="orderType" value="Delivery" ${orderType === "Delivery" ? "checked" : ""} ${config.deliveryEnabled ? "" : "disabled"}> Delivery</label><label class="choice-card ${config.pickupEnabled ? "" : "choice-disabled"}"><input type="radio" name="orderType" value="Pickup" ${orderType === "Pickup" ? "checked" : ""} ${config.pickupEnabled ? "" : "disabled"}> Pickup</label></div>${error("orderType")}
@@ -495,7 +522,7 @@
     else if (current === "/contact") content = contactPage();
     else if (current === "/faq") content = faqPage();
     else content = `<section class="container section"><div class="empty-state"><h1>Page not found</h1><a class="button button-primary" href="/" data-link="/">Go Home</a></div></section>`;
-    shell(content);
+    shell(content, { floating: !["/cart", "/checkout"].includes(current) });
   }
   function saveCheckoutDraft(form) {
     checkoutDraft = Object.fromEntries(new FormData(form).entries());
