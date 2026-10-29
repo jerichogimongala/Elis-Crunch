@@ -15,7 +15,7 @@
   const DEFAULT_SETTINGS = {
     businessName: "Eli's Crunch",
     tagline: "Little Chef, Big Smiles",
-    hours: "8 AM – 9 PM",
+    hours: "8 AM – 9 PM (sample hours; not confirmed)",
     address: "Nabunturan, Davao de Oro",
     facebook: "",
     phone: "",
@@ -28,10 +28,10 @@
   const BUSINESS_HOURS = { open: "08:00", close: "21:00" };
   const SCHEDULE_INTERVAL_MINUTES = 30;
   const SCHEDULE_DAYS_AHEAD = 7;
-  const GCASH_SETTINGS = { accountName: "Eli's Crunch", accountNumber: "09XXXXXXXXX", requireSenderName: true };
+  const GCASH_SETTINGS = { requireSenderName: true };
   const GCASH_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
   const STATUSES = ["Awaiting Payment", "Payment Verification", "Payment Rejected", "Scheduled", "New", "Confirmed", "Preparing", "Ready", "Out for Delivery", "Delivered", "Cancelled"];
-  const PAYMENT_STATUSES = ["Pending Verification", "Verified", "Rejected"];
+  const PAYMENT_STATUSES = ["Demo Review Pending", "Demo Review Complete", "Demo Review Rejected"];
   const app = document.getElementById("app");
   let toastTimer;
   let activeCategory = "All";
@@ -102,7 +102,20 @@
   function saveCart(value) { return write(KEYS.cart, value); }
   function orders() {
     const saved = read(KEYS.orders, []);
-    return Array.isArray(saved) ? saved : [];
+    if (!Array.isArray(saved)) return [];
+    let updated = false;
+    const normalized = saved.map(order => {
+      const status = {
+        "Pending Verification": "Demo Review Pending",
+        "Verified": "Demo Review Complete",
+        "Rejected": "Demo Review Rejected"
+      }[order.paymentStatus];
+      if (!status) return order;
+      updated = true;
+      return { ...order, paymentStatus: status };
+    });
+    if (updated) write(KEYS.orders, normalized);
+    return normalized;
   }
   function gcashDrafts() {
     const saved = read(KEYS.gcashDrafts, []);
@@ -186,6 +199,29 @@
   function scheduleOrderType(order) {
     return order.orderMode === "Scheduled" ? `Scheduled ${order.orderType}` : order.orderType;
   }
+  function paymentStatusLabel(status) {
+    if (status === "Demo Review Pending" || status === "Pending Verification") return "Demo review pending";
+    if (status === "Demo Review Complete" || status === "Verified") return "Demo review complete (simulated)";
+    if (status === "Demo Review Rejected" || status === "Rejected") return "Demo review rejected";
+    return "Demo proof not submitted";
+  }
+  function paymentReviewPending(order) {
+    return order.paymentStatus === "Demo Review Pending" || order.paymentStatus === "Pending Verification";
+  }
+  function paymentReviewComplete(order) {
+    return order.paymentStatus === "Demo Review Complete" || order.paymentStatus === "Verified";
+  }
+  function paymentReviewRejected(order) {
+    return order.paymentStatus === "Demo Review Rejected" || order.paymentStatus === "Rejected";
+  }
+  function demoOrderStatusLabel(order) {
+    if (order.paymentMethod === "GCash") {
+      if (order.status === "Payment Verification") return "DEMO · Review pending";
+      if (order.status === "Payment Rejected") return "DEMO · Review rejected";
+      if (order.status === "Confirmed") return "DEMO · Review complete (simulated)";
+    }
+    return `DEMO · ${order.status}`;
+  }
   function availablePayments(orderType, orderMode) {
     if (orderType === "Pickup") return ["Cash on Pickup", "GCash"];
     return orderMode === "Scheduled" ? ["GCash"] : ["Cash on Delivery", "GCash"];
@@ -254,16 +290,16 @@
   function footer() {
     const cfg = settings();
     return `<footer class="footer"><div class="container"><div class="footer-grid">
-      <div><a class="brand" href="/" data-link="/"><img src="/images/eli-icon.jpg" alt=""><span>${esc(cfg.businessName)}</span></a><p style="margin-top:14px">${esc(cfg.tagline)}</p><p>${esc(cfg.address)}<br>${esc(cfg.hours)}</p></div>
+      <div><a class="brand" href="/" data-link="/"><img src="/images/eli-icon.jpg" alt=""><span>${esc(cfg.businessName)}</span></a><p style="margin-top:14px">${esc(cfg.tagline)}</p><p>Proposed location: ${esc(cfg.address)}<br>Sample hours: ${esc(cfg.hours)}</p></div>
       <div><strong>Explore</strong><div class="footer-links" style="margin-top:14px">${link("/", "Home")}${link("/menu", "Menu")}${link("/track-order", "Track Order")}</div></div>
       <div><strong>More</strong><div class="footer-links" style="margin-top:14px">${link("/about", "About")}${link("/contact", "Contact")}${link("/faq", "FAQ")}${cfg.facebook ? `<a href="${esc(cfg.facebook)}" target="_blank" rel="noopener noreferrer">Facebook</a>` : ""}</div></div>
-    </div><div class="footer-bottom">© ${new Date().getFullYear()} ${esc(cfg.businessName)} · Demo online ordering proposal · Food images shown in this demo are for presentation purposes and may be replaced with official Eli's Crunch product photos.</div></div></footer>`;
+    </div><div class="footer-bottom">© ${new Date().getFullYear()} ${esc(cfg.businessName)} · Proposal demo only · Food images are presentation placeholders and may be replaced by owner-approved photos · Hours, delivery coverage and fees require confirmation · No real payment is processed.</div></div></footer>`;
   }
   function shell(content, options = {}) {
     const floatingCart = cartCount() && options.floating !== false
       ? `<div class="mobile-cart"><a class="button button-primary" href="/cart" data-link="/cart">🛒 View Cart — ${money(subtotal())}</a></div>` : "";
     const closedBanner = !isBusinessOpen()
-      ? `<div class="closed-banner" role="status"><div><strong>We're currently closed</strong><br>You can still place an order for our next available opening.</div>${path() === "/checkout"
+      ? `<div class="closed-banner" role="status"><div><strong>Outside this demo's sample hours</strong><br>Its 8 AM–9 PM schedule is for demonstration only; the owner has not confirmed business hours.</div>${path() === "/checkout"
         ? `<button class="button button-outline" type="button" data-action="select-scheduled">Schedule an Order</button>`
         : `<a class="button button-outline" href="/menu" data-link="/menu">Schedule an Order</a>`}</div>`
       : "";
@@ -287,11 +323,11 @@
     const heroProducts = ["six-piece-wings", "pasta-carbonara", "rice99-chicken-katsu", "rice-meal-pork-sisig"]
       .map(id => catalogue.find(item => item.id === id))
       .filter(Boolean);
-    return `<section class="hero"><div class="container hero-grid"><div class="hero-copy"><div class="eyebrow">Nabunturan, Davao de Oro</div>
+    return `<section class="hero"><div class="container hero-grid"><div class="eyebrow">Proposed service area: ${esc(settings().address)}</div>
       <h1>Good Food.<br><span>Big Smiles.</span><br>Delivered.</h1>
-      <p class="lead">Order your favorite Eli's Crunch meals online for delivery or pickup in Nabunturan.</p>
+      <p class="lead">Explore the Eli's Crunch menu and preview a proposed delivery and pickup ordering experience.</p>
       <div class="hero-actions"><a class="button button-primary" href="/menu" data-link="/menu">${isBusinessOpen() ? "Order Now" : "Schedule an Order"}</a><a class="button button-outline" href="/menu" data-link="/menu">View Menu</a></div>
-      <div class="trust-row"><span>Browse the menu anytime</span><span>Delivery or pickup</span><span>Order tracking demo</span></div>
+      <div class="trust-row"><span>Browse the menu anytime</span><span>Delivery or pickup proposal</span><span>Demo order tracking</span></div>
       </div><div class="hero-art"><div class="hero-slideshow" role="img" aria-label="Rotating temporary demo food photos from the Eli's Crunch menu"><div class="hero-slides">${heroProducts.map((item, index) => `<figure class="hero-slide" style="--slide-index:${index}" aria-hidden="true"><img src="${esc(item.image)}" alt="" data-image-source="${esc(item.imageSource)}"><figcaption><span>From the menu</span><strong>${esc(item.name)}</strong></figcaption></figure>`).join("")}</div><div class="hero-slide-indicators" aria-hidden="true">${heroProducts.map((_, index) => `<span style="--slide-index:${index}"></span>`).join("")}</div></div></div></div></section>
       <section class="section"><div class="container"><div class="section-heading"><div><div class="eyebrow">From the menu</div><h2>Customer favorites</h2><p>Explore the Eli's Crunch menu and find something to enjoy.</p></div>${link("/menu", "See full menu →", "button button-outline")}</div>
       <div class="product-grid">${featured.map(productCard).join("")}</div></div></section>
@@ -364,18 +400,18 @@
     const paymentOptions = availablePayments(orderType, orderMode);
     let payment = paymentOptions.includes(prior.payment) ? prior.payment : paymentOptions[0];
     const dateTimeLabel = `${formatScheduleDate(firstSchedule.date)} at ${formatScheduleTime(firstSchedule.time)}`;
-    return `<section class="container page-top"><div class="eyebrow">Secure your demo order</div><h1>Checkout</h1><p class="muted">Demo checkout only — payment options are configurable for the final system.</p></section><section class="container section-tight"><form id="checkout-form" novalidate><div class="two-col"><div>
+    return `<section class="container page-top"><div class="eyebrow">Proposal walkthrough</div><h1>Demo Checkout</h1><p class="muted">No order is sent and no payment is taken.</p></section><div class="container section-tight"><div class="demo-payment-callout"><strong>Use fictional details only.</strong> Business hours, delivery coverage and fees, and pickup availability/location are not owner-confirmed. Any options and amounts shown are examples.</div></div><section class="container section-tight"><form id="checkout-form" novalidate><div class="two-col"><div>
       <div class="panel"><h2 style="font-size:25px">Customer Information</h2><div class="form-grid">
       <div class="field"><label for="customer-name">Full Name *</label><input id="customer-name" name="name" autocomplete="name" value="${esc(prior.name || "")}" required>${error("name")}</div>
       <div class="field"><label for="customer-phone">Mobile Number *</label><input id="customer-phone" name="phone" type="tel" autocomplete="tel" placeholder="09XXXXXXXXX" value="${esc(prior.phone || "")}" required>${error("phone")}</div></div></div>
       <div class="panel"><h2 style="font-size:25px">Order Type</h2><div class="choice-row"><label class="choice-card"><input type="radio" name="orderType" value="Delivery" ${orderType === "Delivery" ? "checked" : ""}> Delivery</label><label class="choice-card"><input type="radio" name="orderType" value="Pickup" ${orderType === "Pickup" ? "checked" : ""}> Pickup</label></div>${error("orderType")}
       <div id="delivery-fields" style="${orderType === "Pickup" ? "display:none" : ""};margin-top:15px"><div class="form-grid"><div class="field field-full"><label for="address">Address *</label><input id="address" name="address" autocomplete="street-address" value="${esc(prior.address || "")}">${error("address")}</div><div class="field"><label for="barangay">Barangay *</label><input id="barangay" name="barangay" value="${esc(prior.barangay || "")}">${error("barangay")}</div><div class="field"><label for="landmark">Landmark</label><input id="landmark" name="landmark" value="${esc(prior.landmark || "")}"></div><div class="field field-full"><label for="delivery-notes">Delivery Notes</label><textarea id="delivery-notes" name="notes">${esc(prior.notes || "")}</textarea></div></div></div></div>
       <div class="panel"><h2 style="font-size:25px">When would you like your order?</h2><div class="choice-row"><label class="choice-card ${!open ? "choice-disabled" : ""}"><input type="radio" name="orderMode" value="Now" ${orderMode === "Now" ? "checked" : ""} ${!open ? "disabled" : ""}> Order Now</label><label class="choice-card"><input type="radio" name="orderMode" value="Scheduled" ${orderMode === "Scheduled" ? "checked" : ""}> Schedule for Later</label></div>${error("orderMode")}
-      ${orderMode === "Scheduled" ? `<div class="schedule-fields"><p class="small muted"><strong>Next available:</strong> ${esc(dateTimeLabel)}</p><div class="form-grid"><div class="field"><label for="scheduled-date">Date</label><input id="scheduled-date" name="scheduledDate" type="date" min="${minDate}" max="${maxDate}" value="${scheduledDate}" required>${error("scheduledDate")}</div><div class="field"><label for="scheduled-time">Time</label><select id="scheduled-time" name="scheduledTime" required>${availableSlots.map(time => `<option value="${time}" ${time === scheduledTime ? "selected" : ""}>${formatScheduleTime(time)}</option>`).join("")}</select>${error("scheduledTime")}</div></div></div>` : open ? `<p class="small muted" style="margin-bottom:0">The business is open now. You can also schedule your order for a later time.</p>` : ""}
+      ${orderMode === "Scheduled" ? `<div class="schedule-fields"><p class="small muted"><strong>Next demo slot:</strong> ${esc(dateTimeLabel)} · Sample hours are unconfirmed.</p><div class="form-grid"><div class="field"><label for="scheduled-date">Date</label><input id="scheduled-date" name="scheduledDate" type="date" min="${minDate}" max="${maxDate}" value="${scheduledDate}" required>${error("scheduledDate")}</div><div class="field"><label for="scheduled-time">Time</label><select id="scheduled-time" name="scheduledTime" required>${availableSlots.map(time => `<option value="${time}" ${time === scheduledTime ? "selected" : ""}>${formatScheduleTime(time)}</option>`).join("")}</select>${error("scheduledTime")}</div></div></div>` : open ? `<p class="small muted" style="margin-bottom:0">Within the sample schedule. Actual business hours need owner confirmation.</p>` : ""}
       </div>
-      <div class="panel"><h2 style="font-size:25px">Payment Method *</h2><div class="choice-row">${paymentOptions.map(method =>
-        `<label class="choice-card"><input type="radio" name="payment" value="${method}" ${payment === method ? "checked" : ""}> ${method}</label>`).join("")}</div>${error("payment")}<p class="small muted" style="margin:12px 0 0">${orderMode === "Scheduled" && orderType === "Delivery" ? "Scheduled deliveries require GCash payment verification." : "GCash requires submitting payment proof before the order is placed."}</p></div>
-      </div><aside><div class="panel"><h2 style="font-size:25px">Your Order</h2><p><strong>Order Type:</strong> ${orderMode === "Scheduled" ? "Scheduled Order" : "Order Now"}</p>${orderMode === "Scheduled" ? `<p><strong>Scheduled For:</strong><br>${esc(formatScheduleDate(scheduledDate))}<br>${esc(formatScheduleTime(scheduledTime))}</p>` : ""}${rows.map(({product, quantity}) => `<div class="summary-line"><span>${esc(product.name)} × ${quantity}</span><strong>${money(product.price * quantity)}</strong></div>`).join("")}            ${checkoutErrors.cart ? `<p class="alert">${esc(checkoutErrors.cart)}</p>` : ""}<div class="summary-line"><span>Subtotal</span><strong>${money(subtotal())}</strong></div><div class="summary-line"><span>Demo delivery fee</span><span id="checkout-fee">${money(deliveryFee(orderType))}</span></div><div class="summary-line total"><span>Total</span><span id="checkout-total">${money(subtotal() + deliveryFee(orderType))}</span></div><button class="button button-outline button-block" type="button" data-action="edit-order">Edit Order</button><button class="button button-primary button-block" style="margin-top:10px" type="submit">${payment === "GCash" ? "Continue to GCash Payment" : "Place Order"}</button></div></aside></div></form></section>`;
+      <div class="panel"><h2 style="font-size:25px">Demo Payment Method *</h2><p class="small muted">Selections only; nothing is charged or sent. Delivery, pickup, and payment policies are unconfirmed examples.</p><div class="choice-row">${paymentOptions.map(method =>
+        `<label class="choice-card"><input type="radio" name="payment" value="${method}" ${payment === method ? "checked" : ""}> ${method}</label>`).join("")}</div>${error("payment")}<p class="small muted" style="margin:12px 0 0">${orderMode === "Scheduled" && orderType === "Delivery" ? "Scheduled delivery demo uses the simulated GCash screenshot-review flow." : "GCash opens a simulated review walkthrough only; do not send money or use real details."}</p></div>
+      </div><aside><div class="panel"><h2 style="font-size:25px">Your Demo Order</h2><p><strong>Order Type:</strong> ${orderMode === "Scheduled" ? "Scheduled order demo" : "Order now demo"}</p>${orderMode === "Scheduled" ? `<p><strong>Sample schedule:</strong><br>${esc(formatScheduleDate(scheduledDate))}<br>${esc(formatScheduleTime(scheduledTime))}</p>` : ""}${rows.map(({product, quantity}) => `<div class="summary-line"><span>${esc(product.name)} × ${quantity}</span><strong>${money(product.price * quantity)}</strong></div>`).join("")}            ${checkoutErrors.cart ? `<p class="alert">${esc(checkoutErrors.cart)}</p>` : ""}<div class="summary-line"><span>Subtotal</span><strong>${money(subtotal())}</strong></div><div class="summary-line"><span>Unconfirmed demo delivery fee</span><span id="checkout-fee">${money(deliveryFee(orderType))}</span></div><div class="summary-line total"><span>Demo total (not charged)</span><span id="checkout-total">${money(subtotal() + deliveryFee(orderType))}</span></div><p class="small muted">This proposal does not send orders to Eli's Crunch.</p><button class="button button-outline button-block" type="button" data-action="edit-order">Edit Order</button><button class="button button-primary button-block" style="margin-top:10px" type="submit">${payment === "GCash" ? "Continue to GCash Demo" : "Place Demo Order"}</button></div></aside></div></form></section>`;
   }
   function orderItems(order) {
     return (order.items || []).map(item => `<div class="summary-line"><span>${esc(item.name)} × ${item.quantity}${item.specialInstructions ? `<br><small class="muted">Note: ${esc(item.specialInstructions)}</small>` : ""}</span><strong>${money(item.price * item.quantity)}</strong></div>`).join("");
@@ -385,23 +421,27 @@
     const order = orders().find(item => item.id === id);
     if (!order) return `<section class="container section"><div class="empty-state"><h1>No recent order found</h1><p>Place an order to see its confirmation here.</p><a class="button button-primary" href="/menu" data-link="/menu">Browse Menu</a></div></section>`;
     const scheduled = order.orderMode === "Scheduled";
-    const paymentPending = order.paymentStatus === "Pending Verification";
-    const paymentRejected = order.paymentStatus === "Rejected";
-    const paymentMessage = order.paymentMethod === "GCash" ? `<div class="schedule-tracking"><strong>GCash payment status: ${esc(order.paymentStatus || "Pending Verification")}</strong><br>${order.paymentStatus === "Pending Verification" ? "Your order is awaiting manual payment review. You can track its status using your order number." : order.paymentStatus === "Rejected" ? `Payment was rejected: ${esc(order.paymentRejectionReason || "Please contact the business.")}` : "Payment has been verified."}</div>` : "";
-    return `<section class="container section"><div class="panel success-panel"><div class="success-mark ${paymentRejected ? "payment-rejected-mark" : ""}">${paymentRejected ? "!" : "✓"}</div><div class="eyebrow">${paymentRejected ? "Payment needs attention" : paymentPending ? "Payment submitted for review" : scheduled ? "Scheduled order confirmed" : "Order received"}</div><h1 style="font-size:48px">${paymentRejected ? "Payment Rejected" : paymentPending ? "Payment Submitted" : scheduled ? "Scheduled Order Confirmed!" : "Thank you for ordering!"}</h1><p class="lead" style="margin-inline:auto">${paymentRejected ? "Your GCash payment could not be verified. Review the reason below and contact the business." : paymentPending ? "Your order is saved and waiting for manual GCash payment verification." : scheduled ? "Your order has been successfully scheduled." : "Thank you for ordering from Eli's Crunch."}</p>${scheduled && !paymentRejected ? `<div class="schedule-confirmation"><strong>Scheduled For</strong><br>${esc(formatScheduleDate(order.scheduledDate))}<br><strong>${esc(formatScheduleTime(order.scheduledTime))}</strong></div>` : ""}<div class="order-number">Order #${esc(order.id)}</div>${paymentMessage}
-      <div class="panel" style="text-align:left;margin-top:22px"><h2 style="font-size:24px">Order Summary</h2>${orderItems(order)}<div class="summary-line"><span>Subtotal</span><strong>${money(order.subtotal)}</strong></div><div class="summary-line"><span>Demo delivery fee</span><strong>${money(order.deliveryFee)}</strong></div><div class="summary-line total"><span>Total</span><strong>${money(order.total)}</strong></div><div class="divider"></div><p><strong>Customer:</strong> ${esc(order.customer)} · ${esc(order.phone)}</p><p><strong>Order type:</strong> ${esc(scheduleOrderType(order))}</p>${scheduled ? `<p><strong>Scheduled for:</strong> ${esc(formatScheduleDate(order.scheduledDate))} at ${esc(formatScheduleTime(order.scheduledTime))}</p>` : ""}${order.orderType === "Delivery" ? `<p><strong>Address:</strong> ${esc(order.address)}, ${esc(order.barangay)}${order.landmark ? ` · ${esc(order.landmark)}` : ""}</p>` : ""}<p><strong>Payment:</strong> ${esc(order.paymentMethod)}</p></div>${scheduled ? `<p class="small muted">Please keep your order number so you can track your order.</p>` : ""}
+    const paymentPending = paymentReviewPending(order);
+    const paymentRejected = paymentReviewRejected(order);
+    const isGcashDemo = order.paymentMethod === "GCash";
+    const paymentMessage = isGcashDemo ? `<div class="demo-payment-callout"><strong>DEMO · ${esc(paymentStatusLabel(order.paymentStatus))}</strong><br>${paymentPending ? "The sample screenshot is waiting in the simulated admin review queue. No GCash transaction or payment confirmation exists." : paymentRejected ? `The demo screenshot was not accepted: ${esc(order.paymentRejectionReason || "Please contact the presenter.")}` : "The simulated review step is complete. This does not confirm that money was sent or received."}</div>` : "";
+    return `<section class="container section"><div class="panel success-panel"><div class="success-mark ${paymentRejected ? "payment-rejected-mark" : ""}">${paymentRejected ? "!" : "✓"}</div><div class="eyebrow">${isGcashDemo ? paymentRejected ? "Demo review needs attention" : "Demo flow only" : scheduled ? "Scheduled demo order" : "Demo order saved"}</div><h1 style="font-size:48px">${isGcashDemo ? paymentRejected ? "Demo Review Rejected" : paymentPending ? "Demo Screenshot Submitted" : "Demo Order Saved" : scheduled ? "Scheduled Demo Order Saved" : "Demo Order Saved"}</h1><p class="lead" style="margin-inline:auto">${isGcashDemo ? paymentRejected ? "This screenshot was rejected in the simulated review. No GCash payment was made." : paymentPending ? "The sample screenshot is in the simulated review queue. This is not a real order or payment." : "The simulated demo review is complete. No GCash payment was made and this is not a real order." : "This sample order is saved only in this browser and has not been sent to Eli's Crunch."}</p>${scheduled ? `<div class="schedule-confirmation"><strong>Sample schedule</strong><br>${esc(formatScheduleDate(order.scheduledDate))}<br><strong>${esc(formatScheduleTime(order.scheduledTime))}</strong></div>` : ""}<div class="order-number">Demo Order #${esc(order.id)}</div>${paymentMessage}
+      <div class="panel" style="text-align:left;margin-top:22px"><h2 style="font-size:24px">Demo Order Summary</h2>${orderItems(order)}<div class="summary-line"><span>Subtotal</span><strong>${money(order.subtotal)}</strong></div><div class="summary-line"><span>Unconfirmed demo delivery fee</span><strong>${money(order.deliveryFee)}</strong></div><div class="summary-line total"><span>Demo total (not charged)</span><strong>${money(order.total)}</strong></div><div class="divider"></div><p><strong>Demo customer:</strong> ${esc(order.customer)} · ${esc(order.phone)}</p><p><strong>Order type:</strong> ${esc(scheduleOrderType(order))}</p>${scheduled ? `<p><strong>Sample schedule:</strong> ${esc(formatScheduleDate(order.scheduledDate))} at ${esc(formatScheduleTime(order.scheduledTime))}</p>` : ""}${order.orderType === "Delivery" ? `<p><strong>Sample address:</strong> ${esc(order.address)}, ${esc(order.barangay)}${order.landmark ? ` · ${esc(order.landmark)}` : ""}</p>` : ""}<p><strong>Demo payment method:</strong> ${esc(order.paymentMethod)}</p></div>${scheduled ? `<p class="small muted">This sample scheduled order is not sent to the business.</p>` : ""}
       <div class="hero-actions" style="justify-content:center"><a class="button button-dark" href="/track-order/${encodeURIComponent(order.id)}" data-link="/track-order/${encodeURIComponent(order.id)}">Track My Order</a><a class="button button-primary" href="/menu" data-link="/menu">Order Again</a></div></div></section>`;
   }
   function trackingCard(order) {
     const scheduled = order.orderMode === "Scheduled";
+    const isGcashDemo = order.paymentMethod === "GCash";
     const stages = scheduled ? ["Scheduled", "New", "Confirmed", "Preparing", "Ready", "Out for Delivery", "Delivered"] : ["New", "Confirmed", "Preparing", "Ready", "Out for Delivery", "Delivered"];
     const index = stages.indexOf(order.status);
     const isCancelled = order.status === "Cancelled";
-    return `<div class="panel" style="margin-top:20px"><div class="admin-order-head"><div><div class="eyebrow">Order tracking</div><h2 style="font-size:25px">Order #${esc(order.id)}</h2></div><span class="status-badge">${esc(order.status)}</span></div>
-      ${scheduled ? `<div class="schedule-tracking"><strong>Scheduled Order</strong><br>${esc(formatScheduleDate(order.scheduledDate))} — ${esc(formatScheduleTime(order.scheduledTime))}</div>` : ""}
-      ${order.paymentStatus === "Pending Verification" ? `<div class="schedule-tracking"><strong>GCash payment submitted</strong><br>Waiting for the business to review your payment.</div>` : order.paymentStatus === "Rejected" ? `<div class="alert" style="margin:15px 0"><strong>GCash payment rejected.</strong><br>${esc(order.paymentRejectionReason || "Please contact the business for assistance.")}</div>` : order.paymentStatus === "Verified" ? `<div class="schedule-tracking"><strong>GCash payment verified</strong></div>` : ""}
-      ${isCancelled ? `<div class="alert" style="margin:15px 0">This order has been cancelled.</div>` : order.status === "Payment Verification" || order.status === "Payment Rejected" ? `<div class="schedule-tracking"><strong>${order.status === "Payment Rejected" ? "Payment needs attention" : "Order waiting for payment review"}</strong><br>${order.status === "Payment Rejected" ? "Contact the business to resolve your payment." : "Order preparation begins after payment is verified."}</div>` : `<div class="timeline">${stages.map((stage, i) => { const complete = (index >= 0 && i < index) || (scheduled && order.status === "Scheduled" && stage === "Scheduled"); const current = i === index && !(scheduled && order.status === "Scheduled" && stage === "Scheduled"); const label = stage === "Scheduled" ? "Order Scheduled" : stage === "New" ? (scheduled ? "Ready for Preparation" : "Order Placed") : stage === "Confirmed" ? "Order Confirmed" : stage; return `<div class="timeline-step ${complete ? "done" : ""} ${current ? "current" : ""}"><span class="timeline-dot">${complete ? "✓" : current ? "●" : "○"}</span><span class="timeline-label">${label}</span></div>`; }).join("")}</div>`}
-      <p><strong>Order type:</strong> ${esc(scheduleOrderType(order))} · <strong>Total:</strong> ${money(order.total)}</p>${order.paymentMethod === "GCash" ? `<p><strong>Payment status:</strong> ${esc(order.paymentStatus || "Pending Verification")}</p>` : ""}<p class="small muted">Last updated ${new Date(order.updatedAt || order.createdAt).toLocaleString()}</p></div>`;
+    const displayStatus = demoOrderStatusLabel(order);
+    return `<div class="panel" style="margin-top:20px"><div class="admin-order-head"><div><div class="eyebrow">${isGcashDemo ? "Demo order tracking" : "Order tracking"}</div><h2 style="font-size:25px">Order #${esc(order.id)}</h2></div><span class="status-badge">${esc(displayStatus)}</span></div>
+      ${isGcashDemo ? `<div class="demo-payment-callout"><strong>DEMO ONLY · No transaction occurred</strong><br>These walkthrough statuses are simulated in this browser. They do not confirm payment receipt, business acceptance, or a real order.</div>` : ""}
+      ${scheduled ? `<div class="schedule-tracking"><strong>Sample scheduled order</strong><br>${esc(formatScheduleDate(order.scheduledDate))} — ${esc(formatScheduleTime(order.scheduledTime))}</div>` : ""}
+      ${paymentReviewPending(order) ? `<div class="schedule-tracking"><strong>DEMO · Screenshot review pending</strong><br>Waiting for the simulated admin review.</div>` : paymentReviewRejected(order) ? `<div class="alert" style="margin:15px 0"><strong>DEMO · Screenshot review rejected.</strong><br>${esc(order.paymentRejectionReason || "Please contact the presenter.")}</div>` : paymentReviewComplete(order) ? `<div class="schedule-tracking"><strong>DEMO · Screenshot review complete</strong><br>This is not proof of money sent or received.</div>` : ""}
+      ${isCancelled ? `<div class="alert" style="margin:15px 0">This demo order has been cancelled.</div>` : order.status === "Payment Verification" || order.status === "Payment Rejected" ? `<div class="schedule-tracking"><strong>DEMO · ${order.status === "Payment Rejected" ? "Review needs attention" : "Review pending"}</strong><br>${order.status === "Payment Rejected" ? "The sample screenshot was rejected in this simulated flow." : "The simulated review is pending. No order has been sent to the business."}</div>` : `<div class="timeline">${stages.map((stage, i) => { const complete = (index >= 0 && i < index) || (scheduled && order.status === "Scheduled" && stage === "Scheduled"); const current = i === index && !(scheduled && order.status === "Scheduled" && stage === "Scheduled"); const label = stage === "Scheduled" ? "Sample Order Scheduled" : stage === "New" ? (scheduled ? "Ready for Demo Preparation" : "Demo Order Placed") : stage === "Confirmed" ? "Demo Review Complete" : `Demo ${stage}`; return `<div class="timeline-step ${complete ? "done" : ""} ${current ? "current" : ""}"><span class="timeline-dot">${complete ? "✓" : current ? "●" : "○"}</span><span class="timeline-label">${label}</span></div>`; }).join("")}</div>`}
+      <p><strong>Demo order type:</strong> ${esc(scheduleOrderType(order))} · <strong>Total (not charged):</strong> ${money(order.total)}</p>${isGcashDemo ? `<p><strong>Demo review status:</strong> ${esc(paymentStatusLabel(order.paymentStatus))}</p>` : ""}<p class="small muted">Last updated ${new Date(order.updatedAt || order.createdAt).toLocaleString()}</p></div>`;
   }
   function trackPage(specificId = "") {
     const orderId = specificId || orderSearchResult;
@@ -409,11 +449,11 @@
     return `<section class="container page-top"><div class="eyebrow">Stay in the know</div><h1>Track Your Order</h1><p class="lead">Enter your order number to view its latest demo status.</p></section><section class="container section-tight"><form id="track-form" class="panel" style="max-width:650px"><div class="form-grid"><div class="field"><label for="track-id">Order Number</label><input id="track-id" name="orderId" placeholder="EC-DEMO-1001" value="${esc(orderId)}" required></div><div style="align-self:end"><button class="button button-primary button-block" type="submit">Track Order</button></div></div>${orderSearchResult && !order ? `<p class="alert" style="margin:12px 0 0">We couldn't find that order number. Please check it and try again.</p>` : ""}</form>${order ? trackingCard(order) : ""}</section>`;
   }
   function aboutPage() {
-    return `<section class="container section"><div class="two-col"><div><div class="eyebrow">Meet Chef Eli</div><h1>Little Chef,<br>Big Smiles.</h1><p class="lead">Eli's Crunch is a local food delivery and pickup business in Nabunturan, Davao de Oro.</p><p>Browse the menu, place a demo order, and follow its status with this proposed online ordering experience.</p><a class="button button-primary" href="/menu" data-link="/menu">Explore the Menu</a></div><div class="panel" style="display:grid;place-items:center;background:#fff2d1"><img src="/images/eli-icon.jpg" alt="Chef Eli logo" style="width:min(360px,100%);border-radius:50%"></div></div></section>`;
+    return `<section class="container section"><div class="two-col"><div><div class="eyebrow">Proposal demo</div><h1>Little Chef,<br>Big Smiles.</h1><p class="lead">A proposed local delivery and pickup ordering experience for Eli's Crunch. The service area and fulfillment options shown here have not been confirmed by the owner.</p><p>Food images shown in this demo are for presentation purposes and may be replaced with official Eli's Crunch product photos supplied or approved by the owner.</p><a class="button button-primary" href="/menu" data-link="/menu">Explore the Menu</a></div><div class="panel" style="display:grid;place-items:center;background:#fff2d1"><img src="/images/eli-icon.jpg" alt="Eli's Crunch logo placeholder" style="width:min(360px,100%);border-radius:50%"></div></div></section>`;
   }
   function contactPage() {
     const cfg = settings();
-    return `<section class="container section"><div class="eyebrow">Get in touch</div><h1>Contact</h1><p class="lead">Eli's Crunch · ${esc(cfg.address)}</p><div class="panel" style="max-width:640px"><p><strong>Location</strong><br>${esc(cfg.address)}</p><p><strong>Business hours</strong><br>${esc(cfg.hours)}</p>${cfg.phone ? `<p><strong>Contact</strong><br><a href="tel:${esc(cfg.phone)}">${esc(cfg.phone)}</a></p>` : `<p class="muted">Contact information can be added to the demo settings.</p>`}${cfg.facebook ? `<a class="button button-outline" href="${esc(cfg.facebook)}" target="_blank" rel="noopener noreferrer">Visit Facebook</a>` : ""}</div></section>`;
+    return `<section class="container section"><div class="eyebrow">Proposal demo · Owner confirmation needed</div><h1>Contact & Service Details</h1><p class="lead">The information below is illustrative and must be confirmed by Eli's Crunch before the website is used with customers.</p><div class="panel" style="max-width:640px"><p><strong>Proposed locality (unconfirmed)</strong><br>${esc(cfg.address)}</p><p><strong>Sample hours (unconfirmed)</strong><br>${esc(cfg.hours)}</p><p><strong>Delivery coverage & fees</strong><br>Not confirmed; the delivery fee shown at checkout is a sample only.</p><p><strong>Pickup availability & location</strong><br>Not confirmed.</p>${cfg.phone ? `<p><strong>Demo contact (confirm with owner)</strong><br><a href="tel:${esc(cfg.phone)}">${esc(cfg.phone)}</a></p>` : `<p><strong>Contact information</strong><br>Not provided for this demo.</p>`}${cfg.facebook ? `<a class="button button-outline" href="${esc(cfg.facebook)}" target="_blank" rel="noopener noreferrer">Facebook page (confirm with owner)</a>` : `<p>Facebook page information has not been provided.</p>`}</div></section>`;
   }
   function faqPage() {
     const pairs = [["How do I place an order?", "Browse the menu, add items to your cart, and complete the checkout form."], ["Can I choose delivery or pickup?", "Yes. This demo checkout allows you to choose delivery or pickup."], ["How do I track an order?", "Use the order number from the confirmation page on Track Order."], ["Is payment processed online?", "No. Payment choices in this proposal are demo selections only."]];
@@ -559,16 +599,16 @@
       if (gcashScreenshotPreviewUrl) URL.revokeObjectURL(gcashScreenshotPreviewUrl);
       gcashScreenshotPreviewUrl = "";
     }
-    return `<section class="container page-top"><div class="eyebrow">Demo payment submission</div><h1>Pay with GCash</h1><p class="lead">Submit your payment details for manual review. This proposal does not process or verify real payments.</p></section>
+    return `<section class="container page-top"><div class="eyebrow">SIMULATED GCash WALKTHROUGH</div><h1>Demo payment review</h1><p class="lead">No GCash account or payment connection is configured. This page only demonstrates a screenshot review workflow.</p></section>
       <section class="container section-tight gcash-layout"><div>
-        <div class="panel demo-gcash-banner"><span class="demo-tag">DEMO GCash ACCOUNT</span><p>These are placeholder account details for the proposal only. Do not send real money.</p><div class="gcash-account"><span>Account name</span><strong>${esc(GCASH_SETTINGS.accountName)}</strong><span>Account number</span><strong>${esc(GCASH_SETTINGS.accountNumber)}</strong></div></div>
-        <div class="panel"><h2 style="font-size:25px">Payment instructions</h2><ol class="gcash-instructions"><li>Send the exact total shown below using the demo account details.</li><li>Save a screenshot of the transfer confirmation.</li><li>Enter the payment reference number and sender name, then submit for manual verification.</li></ol><p class="small muted">Demo flow only: no GCash gateway, transfer, or notification is connected.</p></div>
-      </div><aside><div class="panel gcash-payment-panel"><div class="eyebrow">Order #${esc(draft.id)}</div><h2 style="font-size:25px">Payment summary</h2>${draft.items.map(item => `<div class="summary-line"><span>${esc(item.name)} × ${item.quantity}</span><strong>${money(item.price * item.quantity)}</strong></div>`).join("")}<div class="summary-line"><span>Subtotal</span><strong>${money(draft.subtotal)}</strong></div><div class="summary-line"><span>Demo delivery fee</span><strong>${money(draft.deliveryFee)}</strong></div><div class="summary-line total"><span>Amount to pay</span><strong>${moneyExact(draft.total)}</strong></div><p><strong>Order type:</strong> ${esc(scheduleOrderType(draft))}</p>${draft.orderMode === "Scheduled" ? `<p><strong>Scheduled for:</strong><br>${esc(formatScheduleDate(draft.scheduledDate))} at ${esc(formatScheduleTime(draft.scheduledTime))}</p>` : ""}
-        <form id="gcash-payment-form" data-draft-id="${esc(draft.id)}" novalidate><div class="field"><label for="gcash-reference">Payment reference number *</label><input id="gcash-reference" name="referenceNumber" autocomplete="off" maxlength="50" value="${esc(draft.paymentReference || "")}" required></div><div class="field"><label for="gcash-sender">GCash sender name *</label><input id="gcash-sender" name="senderName" autocomplete="name" maxlength="100" value="${esc(draft.paymentSenderName || draft.customer || "")}" required></div>
-        <div class="field"><label for="gcash-proof">Payment screenshot * <span class="small muted">(JPG, PNG or WebP; up to 5 MB)</span></label><input id="gcash-proof" name="proof" type="file" accept="image/jpeg,image/png,image/webp" required></div>
-        <div id="gcash-proof-preview" class="gcash-proof-preview">${gcashScreenshotPreviewUrl ? `<img src="${esc(gcashScreenshotPreviewUrl)}" alt="Selected payment screenshot preview"><button class="button button-outline" type="button" data-action="remove-gcash-proof">Remove screenshot</button>` : `<p class="small muted">Your selected screenshot preview will appear here. It is not shown on public order pages.</p>`}</div>
-        <p id="gcash-form-error" class="alert" role="alert" hidden></p><button class="button button-primary button-block" type="submit">Submit Payment for Verification</button></form>
-        <p class="small muted" style="margin-top:12px">After submission, your order number and status will be available for tracking.</p></div></aside></section>`;
+        <div class="panel demo-gcash-banner"><span class="demo-tag">SIMULATED PAYMENT · NO ACCOUNT</span><p>Do not send money, enter real GCash details, or upload a real receipt. No transaction can be made from this proposal.</p></div>
+        <div class="panel"><h2 style="font-size:25px">Demo walkthrough</h2><ol class="gcash-instructions"><li>Use a fictional reference and sender name.</li><li>Attach a made-up or blank sample image to exercise the review controls.</li><li>Submit it to the simulated admin queue. Completing review only changes demo statuses; it does not verify a transfer.</li></ol><p class="small muted">The sample image is stored in this browser only. Do not use personal or financial information.</p></div>
+      </div><aside><div class="panel gcash-payment-panel"><div class="eyebrow">Demo Order #${esc(draft.id)}</div><h2 style="font-size:25px">Walkthrough summary</h2>${draft.items.map(item => `<div class="summary-line"><span>${esc(item.name)} × ${item.quantity}</span><strong>${money(item.price * item.quantity)}</strong></div>`).join("")}<div class="summary-line"><span>Subtotal</span><strong>${money(draft.subtotal)}</strong></div><div class="summary-line"><span>Unconfirmed demo delivery fee</span><strong>${money(draft.deliveryFee)}</strong></div><div class="summary-line total"><span>Demo total (not charged)</span><strong>${moneyExact(draft.total)}</strong></div><p><strong>Demo order type:</strong> ${esc(scheduleOrderType(draft))}</p>${draft.orderMode === "Scheduled" ? `<p><strong>Sample schedule:</strong><br>${esc(formatScheduleDate(draft.scheduledDate))} at ${esc(formatScheduleTime(draft.scheduledTime))}</p>` : ""}
+        <form id="gcash-payment-form" data-draft-id="${esc(draft.id)}" novalidate><div class="field"><label for="gcash-reference">Fictional demo reference *</label><input id="gcash-reference" name="referenceNumber" autocomplete="off" maxlength="50" placeholder="DEMO-REF-001" value="${esc(draft.paymentReference || "")}" required></div><div class="field"><label for="gcash-sender">Fictional demo sender name *</label><input id="gcash-sender" name="senderName" autocomplete="off" maxlength="100" placeholder="Demo Sender" value="${esc(draft.paymentSenderName || "")}" required></div>
+        <div class="field"><label for="gcash-proof">Sample screenshot for demo * <span class="small muted">(JPG, PNG or WebP; up to 5 MB)</span></label><input id="gcash-proof" name="proof" type="file" accept="image/jpeg,image/png,image/webp" required></div>
+        <div id="gcash-proof-preview" class="gcash-proof-preview">${gcashScreenshotPreviewUrl ? `<img src="${esc(gcashScreenshotPreviewUrl)}" alt="Selected demo screenshot preview"><button class="button button-outline" type="button" data-action="remove-gcash-proof">Remove sample</button>` : `<p class="small muted">Choose a non-sensitive sample image. It is not shown on customer tracking pages.</p>`}</div>
+        <p id="gcash-form-error" class="alert" role="alert" hidden></p><button class="button button-primary button-block" type="submit">Submit Sample to Demo Review</button></form>
+        <p class="small muted" style="margin-top:12px">Submitting creates only a local demo order. It does not send an order, charge a customer, or indicate a successful transaction.</p></div></aside></section>`;
   }
   function paymentFormError(message) {
     const region = document.getElementById("gcash-form-error");
@@ -578,8 +618,8 @@
     region.scrollIntoView({ behavior: "smooth", block: "center" });
   }
   async function compressGcashProof(file) {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("Choose a JPG, PNG, or WebP payment screenshot.");
-    if (file.size > GCASH_SCREENSHOT_MAX_BYTES) throw new Error("The payment screenshot must be 5 MB or smaller.");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("Choose a JPG, PNG, or WebP sample image.");
+    if (file.size > GCASH_SCREENSHOT_MAX_BYTES) throw new Error("The sample image must be 5 MB or smaller.");
     const bitmap = await createImageBitmap(file);
     try {
       const scale = Math.min(1, 1400 / Math.max(bitmap.width, bitmap.height));
@@ -587,7 +627,7 @@
       canvas.width = Math.max(1, Math.round(bitmap.width * scale));
       canvas.height = Math.max(1, Math.round(bitmap.height * scale));
       const context = canvas.getContext("2d");
-      if (!context) throw new Error("Your browser could not process the payment screenshot.");
+      if (!context) throw new Error("Your browser could not process the sample image.");
       context.fillStyle = "#fff";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
@@ -614,11 +654,11 @@
     const reference = String(data.referenceNumber || "").trim();
     const sender = String(data.senderName || "").trim();
     if (!reference || reference.length > 50 || !/^[A-Za-z0-9][A-Za-z0-9 -]*$/.test(reference)) {
-      paymentFormError("Enter a valid payment reference number using letters, numbers, spaces, or hyphens.");
+      paymentFormError("Enter a fictional demo reference using letters, numbers, spaces, or hyphens.");
       return;
     }
     if (GCASH_SETTINGS.requireSenderName && !sender) {
-      paymentFormError("Enter the name shown as the GCash sender.");
+      paymentFormError("Enter a fictional demo sender name.");
       return;
     }
     if (sender.length > 100) {
@@ -627,20 +667,20 @@
     }
     const file = gcashScreenshotDraftId === id ? gcashScreenshotFile : data.proof;
     if (!(file instanceof File) || file.size === 0) {
-      paymentFormError("Choose a payment screenshot before submitting.");
+      paymentFormError("Choose a harmless sample image before submitting.");
       return;
     }
     let proofImage;
     try {
       proofImage = await compressGcashProof(file);
     } catch (error) {
-      console.error("Unable to process the GCash payment screenshot.", error);
-      paymentFormError(error instanceof Error ? error.message : "Unable to process the payment screenshot.");
+      console.error("Unable to process the demo screenshot.", error);
+      paymentFormError(error instanceof Error ? error.message : "Unable to process the sample image.");
       return;
     }
     const order = {
       ...draft,
-      paymentStatus: "Pending Verification",
+      paymentStatus: "Demo Review Pending",
       paymentReference: reference,
       paymentSenderName: sender,
       paymentSubmittedAt: new Date().toISOString(),
@@ -666,14 +706,14 @@
     const buttons = [];
     const scheduled = order.orderMode === "Scheduled";
     const due = !scheduled || isScheduleDue(order);
-    if (order.status === "Scheduled" && due) buttons.push(["New", "Prepare Order"]);
-    if (due && order.status === "New") buttons.push(["Confirmed", "Accept"]);
-    if (due && order.status === "Confirmed") buttons.push(["Preparing", "Start Preparing"]);
-    if (due && order.status === "Preparing") buttons.push(["Ready", "Mark Ready"]);
-    if (due && order.status === "Ready" && order.orderType === "Delivery") buttons.push(["Out for Delivery", "Out for Delivery"]);
-    if (due && order.status === "Ready" && order.orderType === "Pickup") buttons.push(["Delivered", "Mark Picked Up"]);
-    if (due && order.status === "Out for Delivery") buttons.push(["Delivered", "Mark Delivered"]);
-    if (!["Delivered", "Cancelled"].includes(order.status)) buttons.push(["Cancelled", "Cancel"]);
+    if (order.status === "Scheduled" && due) buttons.push(["New", "Queue Demo Order"]);
+    if (due && order.status === "New") buttons.push(["Confirmed", "Confirm Demo"]);
+    if (due && order.status === "Confirmed") buttons.push(["Preparing", "Start Demo Prep"]);
+    if (due && order.status === "Preparing") buttons.push(["Ready", "Mark Demo Ready"]);
+    if (due && order.status === "Ready" && order.orderType === "Delivery") buttons.push(["Out for Delivery", "Demo Out for Delivery"]);
+    if (due && order.status === "Ready" && order.orderType === "Pickup") buttons.push(["Delivered", "Complete Demo Pickup"]);
+    if (due && order.status === "Out for Delivery") buttons.push(["Delivered", "Complete Demo Delivery"]);
+    if (!["Delivered", "Cancelled"].includes(order.status)) buttons.push(["Cancelled", "Cancel Demo"]);
     return buttons;
   }
   function setOrderStatus(id, status) {
@@ -682,14 +722,14 @@
     if (!order) { notify("Order not found."); return; }
     if (!STATUSES.includes(status)) { notify("That order status is not valid."); return; }
     if (order.orderMode === "Scheduled" && !isScheduleDue(order) && status !== "Cancelled") {
-      notify(`This order is scheduled for ${formatScheduleDate(order.scheduledDate)} at ${formatScheduleTime(order.scheduledTime)} and is not ready to prepare yet.`);
+      notify(`This demo order is scheduled for ${formatScheduleDate(order.scheduledDate)} at ${formatScheduleTime(order.scheduledTime)} and cannot be advanced yet.`);
       return;
     }
     order.status = status;
     order.updatedAt = new Date().toISOString();
     write(KEYS.orders, list);
     render();
-    notify(`Order ${id} updated to ${status}.`);
+    notify(`Demo order ${id} updated to ${status}.`);
   }
   function adminNav() {
     const current = path();
@@ -702,19 +742,19 @@
   }
   function adminLogin() {
     document.body.classList.remove("has-mobile-cart");
-    app.innerHTML = `<main class="login-wrap"><form class="login-card" id="admin-login"><img class="login-logo" src="/images/eli-icon.jpg" alt="Chef Eli logo"><h1>Eli's Crunch Admin</h1><p class="muted" style="text-align:center">Sign in to the proposal dashboard</p><div class="demo-note"><strong>Demo Admin Access</strong><br>Email: demo@eliscrunch.local<br>Password: demo123<br><small>This is frontend demo protection, not production authentication.</small></div><div class="field"><label for="admin-email">Email</label><input id="admin-email" name="email" type="email" autocomplete="username" required></div><div class="field" style="margin-top:13px"><label for="admin-password">Password</label><input id="admin-password" name="password" type="password" autocomplete="current-password" required></div><p id="login-error" class="field-error" style="margin-top:10px"></p><button class="button button-primary button-block" style="margin-top:10px">Log In</button><a class="button button-outline button-block" style="margin-top:10px" href="/" data-link="/">Back to website</a></form></main>`;
+    app.innerHTML = `<main class="login-wrap"><form class="login-card" id="admin-login"><img class="login-logo" src="/images/eli-icon.jpg" alt="Eli's Crunch logo placeholder"><h1>Eli's Crunch Admin</h1><p class="muted" style="text-align:center">Sign in to the proposal dashboard</p><div class="demo-note"><strong>Public Demo Admin Access</strong><br>Email: demo@eliscrunch.local<br>Password: demo123<br><small>These public demo credentials are not secret. Frontend-only demo protection is not production authentication. Never reuse these credentials or enter real customer/payment data.</small></div><div class="field"><label for="admin-email">Demo email</label><input id="admin-email" name="email" type="email" autocomplete="username" required></div><div class="field" style="margin-top:13px"><label for="admin-password">Demo password</label><input id="admin-password" name="password" type="password" autocomplete="current-password" required></div><p id="login-error" class="field-error" style="margin-top:10px"></p><button class="button button-primary button-block" style="margin-top:10px">Log In</button><a class="button button-outline button-block" style="margin-top:10px" href="/" data-link="/">Back to proposal</a></form></main>`;
   }
   function paymentReviewModal(order) {
     if (!paymentModal || paymentModal.id !== order.id) return "";
     if (paymentModal.mode === "proof") {
       if (!order.paymentProof?.imageData) return "";
-      return `<div class="gcash-modal-backdrop" role="presentation" data-action="close-payment-modal"><section class="gcash-modal" role="dialog" aria-modal="true" aria-labelledby="gcash-modal-title"><button class="gcash-modal-close" type="button" aria-label="Close" data-action="close-payment-modal">×</button><h2 id="gcash-modal-title">Private payment screenshot</h2><p class="small muted">Admin-only demo review · Order #${esc(order.id)}</p><img class="gcash-modal-image" src="${esc(order.paymentProof.imageData)}" alt="Customer-submitted GCash payment proof"></section></div>`;
+      return `<div class="gcash-modal-backdrop" role="presentation" data-action="close-payment-modal"><section class="gcash-modal" role="dialog" aria-modal="true" aria-labelledby="gcash-modal-title"><button class="gcash-modal-close" type="button" aria-label="Close" data-action="close-payment-modal">×</button><h2 id="gcash-modal-title">Private sample screenshot</h2><p class="small muted">Admin-only simulated review · Order #${esc(order.id)} · Not a payment receipt</p><img class="gcash-modal-image" src="${esc(order.paymentProof.imageData)}" alt="Customer-submitted demo screenshot"></section></div>`;
     }
     if (paymentModal.mode === "verify") {
-      return `<div class="gcash-modal-backdrop"><section class="gcash-modal" role="dialog" aria-modal="true" aria-labelledby="gcash-modal-title"><h2 id="gcash-modal-title">Verify this payment?</h2><p>Confirm that the transfer details and amount for Order #${esc(order.id)} have been checked.</p><div class="admin-actions"><button class="button button-primary" data-action="confirm-payment-verify" data-id="${esc(order.id)}">Confirm Verification</button><button class="button button-outline" data-action="close-payment-modal">Cancel</button></div></section></div>`;
+      return `<div class="gcash-modal-backdrop"><section class="gcash-modal" role="dialog" aria-modal="true" aria-labelledby="gcash-modal-title"><h2 id="gcash-modal-title">Complete simulated review?</h2><p>For demo purposes only, mark Order #${esc(order.id)} as review-complete. This does not verify a transfer, confirm funds, or accept a real business order.</p><div class="admin-actions"><button class="button button-primary" data-action="confirm-payment-verify" data-id="${esc(order.id)}">Mark Demo Review Complete</button><button class="button button-outline" data-action="close-payment-modal">Cancel</button></div></section></div>`;
     }
     if (paymentModal.mode === "reject") {
-      return `<div class="gcash-modal-backdrop"><form class="gcash-modal" id="reject-payment-form" data-order-id="${esc(order.id)}" aria-labelledby="gcash-modal-title"><h2 id="gcash-modal-title">Reject GCash payment</h2><p>Give the customer a clear reason. This reason will appear in their order tracking.</p><div class="field"><label for="payment-rejection-reason">Reason *</label><textarea id="payment-rejection-reason" name="reason" maxlength="300" required></textarea></div><p id="payment-rejection-error" class="field-error" hidden></p><div class="admin-actions"><button class="button button-danger" type="submit">Reject Payment</button><button class="button button-outline" type="button" data-action="close-payment-modal">Cancel</button></div></form></div>`;
+      return `<div class="gcash-modal-backdrop"><form class="gcash-modal" id="reject-payment-form" data-order-id="${esc(order.id)}" aria-labelledby="gcash-modal-title"><h2 id="gcash-modal-title">Reject sample screenshot</h2><p>Enter a demo reason, which appears on the demo tracking page. No funds or real payment are involved.</p><div class="field"><label for="payment-rejection-reason">Demo reason *</label><textarea id="payment-rejection-reason" name="reason" maxlength="300" required></textarea></div><p id="payment-rejection-error" class="field-error" hidden></p><div class="admin-actions"><button class="button button-danger" type="submit">Reject Demo Screenshot</button><button class="button button-outline" type="button" data-action="close-payment-modal">Cancel</button></div></form></div>`;
     }
     return "";
   }
@@ -722,24 +762,24 @@
     if (!read(KEYS.admin, false)) { go("/admin"); return; }
     const list = orders();
     const order = list.find(item => item.id === id);
-    if (!order || order.paymentMethod !== "GCash" || order.paymentStatus !== "Pending Verification") {
-      notify("This payment is no longer waiting for verification.");
+    if (!order || order.paymentMethod !== "GCash" || !paymentReviewPending(order)) {
+      notify("This demo screenshot is no longer waiting for review.");
       paymentModal = null;
       render();
       return;
     }
-    if (decision === "Verified") {
+    if (decision === "Demo Review Complete") {
       if (!order.paymentProof?.imageData || !order.paymentReference || !order.paymentSenderName) {
-        notify("This payment cannot be verified without its screenshot, reference number, and sender name.");
+        notify("The demo review needs a sample screenshot, fictional reference, and fictional sender name.");
         return;
       }
-      order.paymentStatus = "Verified";
+      order.paymentStatus = "Demo Review Complete";
       order.paymentVerifiedAt = new Date().toISOString();
       if (order.status !== "Cancelled") {
         order.status = order.orderMode === "Scheduled" && !isScheduleDue(order) ? "Scheduled" : "Confirmed";
       }
-    } else if (decision === "Rejected" && reason.trim()) {
-      order.paymentStatus = "Rejected";
+    } else if (decision === "Demo Review Rejected" && reason.trim()) {
+      order.paymentStatus = "Demo Review Rejected";
       order.paymentRejectionReason = reason.trim();
       if (order.status !== "Cancelled") order.status = "Payment Rejected";
     } else {
@@ -750,16 +790,16 @@
     if (!write(KEYS.orders, list)) return;
     paymentModal = null;
     render();
-    notify(decision === "Verified" ? `Payment for ${id} verified.` : `Payment for ${id} rejected.`);
+    notify(decision === "Demo Review Complete" ? `Demo review for ${id} marked complete. No payment was verified.` : `Demo screenshot for ${id} rejected.`);
   }
   function adminDashboard() {
     const list = orders().sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const paidOrders = list.filter(order => order.paymentMethod !== "GCash" || order.paymentStatus === "Verified");
+    const paidOrders = list.filter(order => order.paymentMethod !== "GCash");
     const today = new Date().toDateString();
     const todayOrders = paidOrders.filter(order => new Date(order.createdAt).toDateString() === today && order.status !== "Cancelled");
     const sales = todayOrders.reduce((sum, order) => sum + order.total, 0);
     const unseen = list.filter(order => order.status === "New" && !read(KEYS.seen, []).includes(order.id));
-    const pendingPayments = list.filter(order => order.paymentStatus === "Pending Verification");
+    const pendingPayments = list.filter(paymentReviewPending);
     const delivered = list.filter(order => order.status === "Delivered").length;
     const preparing = list.filter(order => order.status === "Preparing").length;
     const out = list.filter(order => order.status === "Out for Delivery").length;
@@ -768,13 +808,13 @@
     const topProducts = [...bestSellers.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
     const scheduledOrders = list.filter(order => order.orderMode === "Scheduled" && !["Delivered", "Cancelled"].includes(order.status))
       .sort((a, b) => (scheduleDateTime(a)?.getTime() || Infinity) - (scheduleDateTime(b)?.getTime() || Infinity));
-    const notification = `${unseen.length ? `<div class="alert" style="margin:18px 0"><strong>🔔 New Order Received</strong><br>${unseen.map(order => `Order #${esc(order.id)} · ${esc(order.customer)} · ${money(order.total)} <button class="button button-outline" style="min-height:32px;padding:5px 9px;font-size:12px" data-action="view-order" data-id="${esc(order.id)}">View Order</button>`).join("<br>")}</div>` : ""}${pendingPayments.length ? `<div class="gcash-admin-notice"><strong>GCash payments awaiting review (${pendingPayments.length})</strong><br>${pendingPayments.map(order => `Order #${esc(order.id)} · ${esc(order.customer)} · ${money(order.total)} <button class="button button-outline" style="min-height:32px;padding:5px 9px;font-size:12px" data-action="view-order" data-id="${esc(order.id)}">Review payment</button>`).join("<br>")}</div>` : ""}`;
+    const notification = `${unseen.length ? `<div class="alert" style="margin:18px 0"><strong>🔔 New Demo Order</strong><br>${unseen.map(order => `Order #${esc(order.id)} · ${esc(order.customer)} · ${money(order.total)} <button class="button button-outline" style="min-height:32px;padding:5px 9px;font-size:12px" data-action="view-order" data-id="${esc(order.id)}">View Order</button>`).join("<br>")}</div>` : ""}${pendingPayments.length ? `<div class="gcash-admin-notice"><strong>Demo screenshots awaiting simulated review (${pendingPayments.length}) · No payment was made</strong><br>${pendingPayments.map(order => `Order #${esc(order.id)} · ${esc(order.customer)} · ${money(order.total)} <button class="button button-outline" style="min-height:32px;padding:5px 9px;font-size:12px" data-action="view-order" data-id="${esc(order.id)}">Review sample</button>`).join("<br>")}</div>` : ""}`;
     const recent = list.slice(0, 5);
-    const scheduledSection = `<section class="panel" style="margin-top:22px"><div class="section-heading"><h2 style="font-size:24px">Scheduled Orders</h2><a href="/admin/orders" data-link="/admin/orders">Manage orders →</a></div>${scheduledOrders.length ? scheduledOrders.map(order => `<article class="admin-order-card"><div class="admin-order-head"><div><strong>#${esc(order.id)} · ${esc(order.customer)}</strong><div class="small muted">${esc(formatScheduleShortDate(order.scheduledDate))} · ${esc(formatScheduleTime(order.scheduledTime))}</div></div><span class="status-badge">${esc(order.status)}</span></div><p class="small muted" style="margin:8px 0">${esc(order.orderType)} · ${esc(order.paymentMethod)} · ${money(order.total)}</p><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">View details</button>${orderActionButtons(order).map(([status,label]) => `<button class="button ${status==="Cancelled"?"button-danger":"button-primary"}" data-action="set-status" data-id="${esc(order.id)}" data-status="${esc(status)}">${label}</button>`).join("")}</article>`).join("") : `<p class="muted">No scheduled orders yet.</p>`}</section>`;
-    adminLayout(`<div class="eyebrow">Overview · <span class="badge">DEMO DATA + LIVE DEMO ORDERS</span></div><h1 style="font-size:40px">Dashboard</h1><p class="muted">Order statistics update from actual orders placed in this demo. Sales shown are demo order totals.</p>${notification}
-      <div class="stat-grid">${[["New Orders",list.filter(o=>o.status==="New").length],["Preparing",preparing],["Out for Delivery",out],["Completed",delivered],["Today's Sales",money(sales)]].map(([label,value]) => `<div class="stat-card"><span>${label}</span><strong>${value}</strong></div>`).join("")}</div>
-      ${scheduledSection}<div class="two-col" style="margin-top:22px"><section class="panel"><div class="section-heading"><h2 style="font-size:24px">Recent Orders</h2><a href="/admin/orders" data-link="/admin/orders">All orders →</a></div>${recent.length ? recent.map(order => `<div class="admin-order-card"><div class="admin-order-head"><strong>#${esc(order.id)} · ${esc(order.customer)}</strong><span class="status-badge">${esc(order.status)}</span></div><p class="small muted" style="margin:8px 0">${money(order.total)} · ${esc(scheduleOrderType(order))} · ${new Date(order.createdAt).toLocaleString()}</p><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">View details</button></div>`).join("") : `<div class="empty-state">No customer orders yet. Try placing one from the customer website.</div>`}</section>
-      <section class="panel"><h2 style="font-size:24px">Demo Analytics</h2><p>Orders today <strong>${todayOrders.length}</strong></p><p>Sales today <strong>${money(sales)}</strong></p><p>Completed orders <strong>${delivered}</strong></p><p>Delivery orders <strong>${list.filter(o=>o.orderType==="Delivery").length}</strong></p><p>Pickup orders <strong>${list.filter(o=>o.orderType==="Pickup").length}</strong></p><h3>Best-selling products</h3>${topProducts.length ? `<ol>${topProducts.map(([name,quantity]) => `<li>${esc(name)} — ${quantity} ordered</li>`).join("")}</ol>` : `<p class="muted">No demo orders yet.</p>`}<p class="small muted">Analytics use demo order data only. No seeded sales or customer claims are shown.</p></section></div>`, "Dashboard");
+    const scheduledSection = `<section class="panel" style="margin-top:22px"><div class="section-heading"><h2 style="font-size:24px">Scheduled Demo Orders</h2><a href="/admin/orders" data-link="/admin/orders">Manage orders →</a></div>${scheduledOrders.length ? scheduledOrders.map(order => `<article class="admin-order-card"><div class="admin-order-head"><div><strong>Demo #${esc(order.id)} · ${esc(order.customer)}</strong><div class="small muted">${esc(formatScheduleShortDate(order.scheduledDate))} · ${esc(formatScheduleTime(order.scheduledTime))}</div></div><span class="status-badge">${esc(demoOrderStatusLabel(order))}</span></div><p class="small muted" style="margin:8px 0">${esc(order.orderType)} · ${esc(order.paymentMethod)} · demo total ${money(order.total)}</p><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">View demo details</button>${orderActionButtons(order).map(([status,label]) => `<button class="button ${status==="Cancelled"?"button-danger":"button-primary"}" data-action="set-status" data-id="${esc(order.id)}" data-status="${esc(status)}">${label}</button>`).join("")}</article>`).join("") : `<p class="muted">No scheduled demo orders yet.</p>`}</section>`;
+    adminLayout(`<div class="eyebrow">Overview · <span class="badge">SIMULATED DEMO DATA</span></div><h1 style="font-size:40px">Dashboard</h1><p class="muted">All orders and totals here are browser-only examples. GCash demo review orders are excluded from sales and product analytics.</p>${notification}
+      <div class="stat-grid">${[["New Demo Orders",list.filter(o=>o.status==="New").length],["Preparing (demo)",preparing],["Out for Delivery (demo)",out],["Completed (demo)",delivered],["Today's Demo Sales",money(sales)]].map(([label,value]) => `<div class="stat-card"><span>${label}</span><strong>${value}</strong></div>`).join("")}</div>
+      ${scheduledSection}<div class="two-col" style="margin-top:22px"><section class="panel"><div class="section-heading"><h2 style="font-size:24px">Recent Demo Orders</h2><a href="/admin/orders" data-link="/admin/orders">All demo orders →</a></div>${recent.length ? recent.map(order => `<div class="admin-order-card"><div class="admin-order-head"><strong>Demo #${esc(order.id)} · ${esc(order.customer)}</strong><span class="status-badge">${esc(demoOrderStatusLabel(order))}</span></div><p class="small muted" style="margin:8px 0">Demo total ${money(order.total)} · ${esc(scheduleOrderType(order))} · ${new Date(order.createdAt).toLocaleString()}</p><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">View demo details</button></div>`).join("") : `<div class="empty-state">No demo orders yet. Place one from the proposal website walkthrough.</div>`}</section>
+      <section class="panel"><h2 style="font-size:24px">Demo Analytics</h2><p>Orders today <strong>${todayOrders.length}</strong></p><p>Non-GCash demo totals (not revenue) <strong>${money(sales)}</strong></p><p>Completed demo orders <strong>${delivered}</strong></p><p>Delivery demos <strong>${list.filter(o=>o.orderType==="Delivery").length}</strong></p><p>Pickup demos <strong>${list.filter(o=>o.orderType==="Pickup").length}</strong></p><h3>Demo product counts</h3>${topProducts.length ? `<ol>${topProducts.map(([name,quantity]) => `<li>${esc(name)} — ${quantity} demo order(s)</li>`).join("")}</ol>` : `<p class="muted">No demo orders yet.</p>`}<p class="small muted">No values here represent real sales, customers, or business performance.</p></section></div>`, "Dashboard");
   }
   function adminOrders() {
     const allOrders = orders().sort((a, b) => {
@@ -792,21 +832,21 @@
     }).join("");
     const cards = list.map(order => {
       const schedule = order.orderMode === "Scheduled" ? `<div class="schedule-tracking"><strong>Scheduled for ${esc(formatScheduleShortDate(order.scheduledDate))} at ${esc(formatScheduleTime(order.scheduledTime))}</strong></div>` : "";
-      const payment = `${esc(order.paymentMethod)}${order.paymentMethod === "GCash" ? ` · Payment ${esc(order.paymentStatus || "Awaiting Payment")}` : ""}`;
+      const payment = `${esc(order.paymentMethod)}${order.paymentMethod === "GCash" ? ` · DEMO ${esc(paymentStatusLabel(order.paymentStatus))}` : " · demo selection"}`;
       const address = order.orderType === "Delivery" ? ` · ${esc(order.address)}, ${esc(order.barangay)}` : "";
-      const reviewButton = order.paymentStatus === "Pending Verification" ? `<button class="button button-primary" data-action="view-order" data-id="${esc(order.id)}">Review payment</button>` : "";
+      const reviewButton = paymentReviewPending(order) ? `<button class="button button-primary" data-action="view-order" data-id="${esc(order.id)}">Review sample</button>` : "";
       const statusButtons = orderActionButtons(order).map(([status, label]) => `<button class="button ${status === "Cancelled" ? "button-danger" : "button-primary"}" data-action="set-status" data-id="${esc(order.id)}" data-status="${esc(status)}">${label}</button>`).join("");
-      return `<article class="admin-order-card"><div class="admin-order-head"><div><strong>Order #${esc(order.id)}</strong><div class="small muted">${new Date(order.createdAt).toLocaleString()}</div>${schedule}</div><span class="status-badge">${esc(order.status)}</span></div><div class="two-col" style="margin-top:14px;grid-template-columns:1fr 1fr"><div><strong>${esc(order.customer)}</strong><div>${esc(order.phone)}</div><div class="small muted">${esc(scheduleOrderType(order))}${address}</div></div><div><strong>${money(order.total)}</strong><div class="small muted">${payment}</div><div class="small">${order.items.map(item => `${esc(item.name)} × ${item.quantity}`).join(", ")}</div></div></div><div class="admin-actions"><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">Details</button>${reviewButton}${statusButtons}</div></article>`;
+      return `<article class="admin-order-card"><div class="admin-order-head"><div><strong>Demo Order #${esc(order.id)}</strong><div class="small muted">${new Date(order.createdAt).toLocaleString()}</div>${schedule}</div><span class="status-badge">${esc(demoOrderStatusLabel(order))}</span></div><div class="two-col" style="margin-top:14px;grid-template-columns:1fr 1fr"><div><strong>${esc(order.customer)}</strong><div>${esc(order.phone)}</div><div class="small muted">${esc(scheduleOrderType(order))}${address}</div></div><div><strong>Demo total ${money(order.total)}</strong><div class="small muted">${payment}</div><div class="small">${order.items.map(item => `${esc(item.name)} × ${item.quantity}`).join(", ")}</div></div></div><div class="admin-actions"><button class="button button-outline" data-action="view-order" data-id="${esc(order.id)}">Demo details</button>${reviewButton}${statusButtons}</div></article>`;
     }).join("");
     const empty = `<div class="empty-state"><h2>${allOrders.length ? "No matching orders" : "No orders yet"}</h2><p>${allOrders.length ? "Choose another payment status filter." : "Place a customer demo order to see it here."}</p>${allOrders.length ? "" : `<a href="/menu" data-link="/menu" class="button button-primary">Try the customer menu</a>`}</div>`;
-    adminLayout(`<div class="eyebrow">Order management</div><h1 style="font-size:40px">Orders</h1><p class="muted">Orders from customer checkout are saved in this browser's local storage. Scheduled orders are listed by soonest schedule first.</p><div class="menu-toolbar"><label for="payment-status-filter">Payment status</label><select id="payment-status-filter" data-action="payment-filter">${filterOptions}</select></div>${list.length ? cards : empty}`, "Orders");
+    adminLayout(`<div class="eyebrow">Order management · DEMO ONLY</div><h1 style="font-size:40px">Demo Orders</h1><p class="muted">Fictional orders are saved in this browser's local storage. Do not enter real customer information. GCash “review” changes only simulated statuses and is not payment verification.</p><div class="menu-toolbar"><label for="payment-status-filter">Demo review status</label><select id="payment-status-filter" data-action="payment-filter">${filterOptions}</select></div>${list.length ? cards : empty}`, "Demo Orders");
   }
   function adminOrderDetail(id) {
     const order = orders().find(item => item.id === id);
     if (!order) { go("/admin/orders"); notify("Order not found."); return; }
     write(KEYS.seen, [...new Set([...read(KEYS.seen, []), order.id])]);
-    const gcashDetails = order.paymentMethod === "GCash" ? `<div class="gcash-review-panel"><h3>GCash payment review</h3><p><strong>Payment status:</strong> ${esc(order.paymentStatus || "Awaiting Payment")}</p>${order.paymentReference ? `<p><strong>Reference number:</strong> ${esc(order.paymentReference)}</p>` : ""}${order.paymentSenderName ? `<p><strong>Sender name:</strong> ${esc(order.paymentSenderName)}</p>` : ""}${order.paymentSubmittedAt ? `<p><strong>Submitted:</strong> ${new Date(order.paymentSubmittedAt).toLocaleString()}</p>` : ""}${order.paymentRejectionReason ? `<p class="alert"><strong>Rejection reason:</strong> ${esc(order.paymentRejectionReason)}</p>` : ""}${order.paymentProof?.imageData ? `<button class="button button-outline" data-action="review-payment-proof" data-id="${esc(order.id)}">View private screenshot</button>` : `<p class="small muted">No payment screenshot is attached.</p>`}${order.paymentStatus === "Pending Verification" ? `<div class="admin-actions"><button class="button button-primary" data-action="open-payment-verify" data-id="${esc(order.id)}">Verify Payment</button><button class="button button-danger" data-action="open-payment-reject" data-id="${esc(order.id)}">Reject Payment</button></div>` : ""}</div>` : "";
-    adminLayout(`<a href="/admin/orders" data-link="/admin/orders">← Back to orders</a><div class="panel" style="margin-top:16px"><div class="admin-order-head"><div><div class="eyebrow">Order details</div><h1 style="font-size:36px">#${esc(order.id)}</h1></div><span class="status-badge">${esc(order.status)}</span></div><div class="two-col"><section><h2 style="font-size:23px">Customer</h2><p>${esc(order.customer)}<br>${esc(order.phone)}</p><h3>Order type</h3><p>${esc(scheduleOrderType(order))}</p>${order.orderType === "Delivery" ? `<h3>Address</h3><p>${esc(order.address)}, ${esc(order.barangay)}${order.landmark ? `<br>Landmark: ${esc(order.landmark)}` : ""}${order.notes ? `<br>Notes: ${esc(order.notes)}` : ""}</p>` : ""}${order.orderMode === "Scheduled" ? `<h3>Schedule</h3><p class="schedule-tracking"><strong>Scheduled for ${esc(formatScheduleDate(order.scheduledDate))} at ${esc(formatScheduleTime(order.scheduledTime))}</strong></p>` : ""}<h3>Payment</h3><p>${esc(order.paymentMethod)}</p>${gcashDetails}<h3>Placed</h3><p>${new Date(order.createdAt).toLocaleString()}</p></section><section><h2 style="font-size:23px">Items</h2>${orderItems(order)}<div class="summary-line"><span>Subtotal</span><strong>${money(order.subtotal)}</strong></div><div class="summary-line"><span>Demo delivery fee</span><strong>${money(order.deliveryFee)}</strong></div><div class="summary-line total"><span>Total</span><strong>${money(order.total)}</strong></div><h3 style="margin-top:18px">Status: ${esc(order.status)}</h3><div class="admin-actions">${orderActionButtons(order).map(([status,label]) => `<button class="button ${status==="Cancelled"?"button-danger":"button-primary"}" data-action="set-status" data-id="${esc(order.id)}" data-status="${esc(status)}">${label}</button>`).join("")}</div></section></div></div>${paymentReviewModal(order)}`, "Order Details");
+    const gcashDetails = order.paymentMethod === "GCash" ? `<div class="gcash-review-panel"><h3>Simulated GCash Review · No Transaction</h3><p><strong>Demo status:</strong> ${esc(paymentStatusLabel(order.paymentStatus))}</p>${order.paymentReference ? `<p><strong>Fictional reference:</strong> ${esc(order.paymentReference)}</p>` : ""}${order.paymentSenderName ? `<p><strong>Fictional sender:</strong> ${esc(order.paymentSenderName)}</p>` : ""}${order.paymentSubmittedAt ? `<p><strong>Demo submitted:</strong> ${new Date(order.paymentSubmittedAt).toLocaleString()}</p>` : ""}${order.paymentRejectionReason ? `<p class="alert"><strong>Demo rejection reason:</strong> ${esc(order.paymentRejectionReason)}</p>` : ""}${order.paymentProof?.imageData ? `<button class="button button-outline" data-action="review-payment-proof" data-id="${esc(order.id)}">View private sample</button>` : `<p class="small muted">No sample image is attached.</p>`}${paymentReviewPending(order) ? `<div class="admin-actions"><button class="button button-primary" data-action="open-payment-verify" data-id="${esc(order.id)}">Complete Demo Review</button><button class="button button-danger" data-action="open-payment-reject" data-id="${esc(order.id)}">Reject Sample</button></div>` : ""}</div>` : "";
+    adminLayout(`<a href="/admin/orders" data-link="/admin/orders">← Back to demo orders</a><div class="panel" style="margin-top:16px"><div class="demo-payment-callout"><strong>DEMO DATA ONLY</strong><br>Use fictional customer information. Nothing on this page is sent to Eli's Crunch or represents a real order or payment.</div><div class="admin-order-head"><div><div class="eyebrow">Demo order details</div><h1 style="font-size:36px">#${esc(order.id)}</h1></div><span class="status-badge">${esc(demoOrderStatusLabel(order))}</span></div><div class="two-col"><section><h2 style="font-size:23px">Fictional customer</h2><p>${esc(order.customer)}<br>${esc(order.phone)}</p><h3>Demo order type</h3><p>${esc(scheduleOrderType(order))}</p>${order.orderType === "Delivery" ? `<h3>Sample address</h3><p>${esc(order.address)}, ${esc(order.barangay)}${order.landmark ? `<br>Landmark: ${esc(order.landmark)}` : ""}${order.notes ? `<br>Notes: ${esc(order.notes)}` : ""}</p>` : ""}${order.orderMode === "Scheduled" ? `<h3>Sample schedule</h3><p class="schedule-tracking"><strong>${esc(formatScheduleDate(order.scheduledDate))} at ${esc(formatScheduleTime(order.scheduledTime))}</strong></p>` : ""}<h3>Demo payment selection</h3><p>${esc(order.paymentMethod)}</p>${gcashDetails}<h3>Demo record created</h3><p>${new Date(order.createdAt).toLocaleString()}</p></section><section><h2 style="font-size:23px">Sample items</h2>${orderItems(order)}<div class="summary-line"><span>Subtotal</span><strong>${money(order.subtotal)}</strong></div><div class="summary-line"><span>Unconfirmed demo delivery fee</span><strong>${money(order.deliveryFee)}</strong></div><div class="summary-line total"><span>Demo total (not charged)</span><strong>${money(order.total)}</strong></div><h3 style="margin-top:18px">Demo status: ${esc(demoOrderStatusLabel(order))}</h3><div class="admin-actions">${orderActionButtons(order).map(([status,label]) => `<button class="button ${status==="Cancelled"?"button-danger":"button-primary"}" data-action="set-status" data-id="${esc(order.id)}" data-status="${esc(status)}">${label}</button>`).join("")}</div></section></div></div>${paymentReviewModal(order)}`, "Demo Order Details");
   }
   function adminMenu() {
     const list = products();
@@ -1001,7 +1041,7 @@
       if (!read(KEYS.admin, false)) { go("/admin"); return; }
       paymentModal = { id, mode: action === "open-payment-verify" ? "verify" : "reject" };
       render();
-    } else if (action === "confirm-payment-verify") reviewGcashPayment(id, "Verified");
+    } else if (action === "confirm-payment-verify") reviewGcashPayment(id, "Demo Review Complete");
     else if (action === "close-payment-modal") {
       paymentModal = null;
       render();
@@ -1012,7 +1052,7 @@
       const input = document.getElementById("gcash-proof");
       if (input) input.value = "";
       const preview = document.getElementById("gcash-proof-preview");
-      if (preview) preview.innerHTML = `<p class="small muted">Your selected screenshot preview will appear here. It is not shown on public order pages.</p>`;
+      if (preview) preview.innerHTML = `<p class="small muted">Your selected sample preview will appear here. It is not shown on public tracking pages.</p>`;
     }
     else if (action === "admin-logout") {
       paymentModal = null;
@@ -1075,13 +1115,13 @@
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
         target.value = "";
         gcashScreenshotFile = null;
-        paymentFormError("Choose a JPG, PNG, or WebP payment screenshot.");
+        paymentFormError("Choose a JPG, PNG, or WebP sample image.");
         return;
       }
       if (file.size > GCASH_SCREENSHOT_MAX_BYTES) {
         target.value = "";
         gcashScreenshotFile = null;
-        paymentFormError("The payment screenshot must be 5 MB or smaller.");
+        paymentFormError("The sample image must be 5 MB or smaller.");
         return;
       }
       gcashScreenshotDraftId = target.form.dataset.draftId;
@@ -1089,7 +1129,7 @@
       if (gcashScreenshotPreviewUrl) URL.revokeObjectURL(gcashScreenshotPreviewUrl);
       gcashScreenshotPreviewUrl = URL.createObjectURL(file);
       const preview = document.getElementById("gcash-proof-preview");
-      if (preview) preview.innerHTML = `<img src="${esc(gcashScreenshotPreviewUrl)}" alt="Selected payment screenshot preview"><button class="button button-outline" type="button" data-action="remove-gcash-proof">Remove screenshot</button>`;
+      if (preview) preview.innerHTML = `<img src="${esc(gcashScreenshotPreviewUrl)}" alt="Selected demo screenshot preview"><button class="button button-outline" type="button" data-action="remove-gcash-proof">Remove sample</button>`;
       const error = document.getElementById("gcash-form-error");
       if (error) error.hidden = true;
     } else if (target.id === "product-image" && target.files[0]) {
@@ -1140,7 +1180,7 @@
         error.hidden = false;
         return;
       }
-      reviewGcashPayment(form.dataset.orderId, "Rejected", reason);
+      reviewGcashPayment(form.dataset.orderId, "Demo Review Rejected", reason);
     }
     else if (form.id === "track-form") {
       event.preventDefault();
