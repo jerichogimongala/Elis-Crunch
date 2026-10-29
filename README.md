@@ -42,4 +42,4 @@ Authentication is frontend demo protection only. Use **Reset Demo Data** in Admi
 
 ## Deployment
 
-The included `_redirects` file enables history-route fallback on Netlify. For other static hosts, configure a rewrite of application routes to `index.html`. The included Node server already serves the app shell for direct route visits.
+The included `vercel.json` rewrites application routes to `index.html` for direct visits and browser refreshes on Vercel. In the Vercel project settings, choose the **Other** framework preset, leave the Build Command and Install Command empty, and set the Output Directory to `.` if Vercel requires an output directory. The `_redirects` file enables equivalent history-route fallback on Netlify. The included Node server serves the app shell for direct route visits locally.
