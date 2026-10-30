@@ -705,6 +705,9 @@
       return;
     }
     const message = buildMessengerOrderMessage(data);
+    messengerRequestPending = true;
+    if (button) button.disabled = true;
+    const copyPromise = copyOrderMessage(message);
     const destination = settings().messengerUrl;
     let messengerWindow = null;
     let opened = false;
@@ -729,9 +732,7 @@
         status = "Your browser blocked a new Messenger tab. The message will be copied before this page redirects to Messenger.";
       }
     }
-    messengerRequestPending = true;
-    if (button) button.disabled = true;
-    const copied = await copyOrderMessage(message);
+    const copied = await copyPromise;
     messengerRequestPending = false;
     messengerResult = {
       message,
