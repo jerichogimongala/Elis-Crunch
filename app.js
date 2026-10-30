@@ -708,6 +708,7 @@
     const destination = settings().messengerUrl;
     let messengerWindow = null;
     let opened = false;
+    let redirectInCurrentTab = false;
     let status;
     if (!destination) {
       status = "The official Messenger URL is missing or invalid. Your message is ready below; configure and test the correct Facebook/Messenger destination before using checkout.";
@@ -724,7 +725,8 @@
         }
         status = "Messenger opened. The website has not sent your order. Paste the message below into the conversation and press Send.";
       } else {
-        status = "Your browser blocked the Messenger tab. Your order message is still available below; copy it and open the configured conversation manually.";
+        redirectInCurrentTab = true;
+        status = "Your browser blocked a new Messenger tab. The message will be copied before this page redirects to Messenger.";
       }
     }
     messengerRequestPending = true;
@@ -736,6 +738,13 @@
       opened,
       status: `${status}${copied ? " The message was copied to your clipboard." : " Clipboard access was unavailable; use Copy Order Details or select and copy the message below."} After Messenger opens, paste the copied order details and press Send. Your order is not confirmed until Eli's Crunch replies to you.`
     };
+    if (redirectInCurrentTab && copied) {
+      window.location.assign(destination);
+      return;
+    }
+    if (redirectInCurrentTab) {
+      messengerResult.status = "Your browser blocked a new Messenger tab and could not copy the message. Copy the order details below, then open the configured Messenger link manually.";
+    }
     render();
     document.getElementById("messenger-result")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
