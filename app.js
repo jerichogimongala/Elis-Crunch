@@ -433,13 +433,13 @@
         <span class="eyebrow">Next step required</span>
         <span class="messenger-status-pill">${messengerResult.opened ? "Messenger opened" : "Message ready"}</span>
       </div>
-      <h2>Review and send your message</h2>
+      <h2>Order Review</h2>
       <p class="messenger-intro">${esc(messengerResult.status)}</p>
       <div class="messenger-warning">
         <strong>Your order is not confirmed until Eli's Crunch replies through Messenger.</strong>
         Please verify your details before sending.
       </div>
-      <p class="messenger-redirect-notice"><strong>Next step:</strong> Clicking below will open the configured Messenger conversation in a new tab and copy your message. Paste it into the conversation and press Send; clicking the button alone does not send your order.</p>
+      <p class="messenger-redirect-notice"><strong>Next step:</strong> Clicking <strong>Place Order via Messenger</strong> will open the configured Messenger conversation in a new tab and copy your message. Paste it into the conversation and press Send; the website does not send it for you.</p>
 
       <div class="messenger-message-shell">
         <div class="messenger-message">
@@ -455,7 +455,7 @@
       <div class="messenger-actions">
         <button class="button button-primary button-block messenger-submit" type="button" data-action="place-order-messenger">Place Order via Messenger</button>
       </div>
-      <p class="small muted messenger-note">${messengerResult.opened ? "Messenger was opened in a new tab. Paste the copied message into that conversation and press Send." : "Messenger did not open. Copy the message, then open the official Messenger link after configuring it."}</p>
+      <p class="small muted messenger-note">${messengerResult.opened ? "Messenger was opened in a new tab. Paste the copied message into that conversation and press Send." : messengerResult.ready ? "Review the details above, then continue to Messenger when you are ready." : "Messenger did not open. Copy the message, then open the official Messenger link after configuring it."}</p>
     </div>` : "";
     return `<section class="container page-top"><div class="eyebrow">Checkout</div><h1>Review Your Order</h1><p class="lead">Prepare a message for Eli's Crunch. Nothing is sent until you paste and send it in Messenger.</p></section><section class="container section-tight"><form id="checkout-form" novalidate><div class="two-col"><div>
       <div class="panel"><h2 style="font-size:25px">Customer Information</h2><div class="form-grid"><div class="field"><label for="customer-name">Full name *</label><input id="customer-name" name="name" autocomplete="name" value="${esc(prior.name || "")}" required aria-describedby="error-name">${error("name")}</div><div class="field"><label for="customer-phone">Contact number *</label><input id="customer-phone" name="phone" type="tel" autocomplete="tel" value="${esc(prior.phone || "")}" required aria-describedby="error-phone">${error("phone")}</div></div></div>
@@ -463,7 +463,7 @@
       <div id="delivery-fields" class="form-grid" style="${orderType === "Pickup" ? "display:none" : "margin-top:15px"}"><div class="field field-full"><label for="address">Complete delivery address *</label><input id="address" name="address" autocomplete="street-address" placeholder="House/building, street, purok/sitio, barangay, city" value="${esc(prior.address || "")}" required>${error("address")}</div><div class="field field-full"><label for="landmark">Nearby landmark</label><input id="landmark" name="landmark" value="${esc(prior.landmark || "")}"></div><div class="field field-full"><label for="delivery-notes">Delivery instructions</label><textarea id="delivery-notes" name="notes">${esc(prior.notes || "")}</textarea></div></div></div>
       <div class="panel"><h2 style="font-size:25px">Preferred timing</h2><div class="choice-row"><label class="choice-card"><input type="radio" name="orderMode" value="Now" ${orderMode === "Now" ? "checked" : ""}> ASAP (subject to confirmation)</label>${canSchedule ? `<label class="choice-card"><input type="radio" name="orderMode" value="Scheduled" ${orderMode === "Scheduled" ? "checked" : ""}> Schedule for later</label>` : ""}</div>${error("orderMode")}${scheduleFields}</div>
       <div class="panel"><h2 style="font-size:25px">Payment preference</h2><p class="small muted"><strong>Demo only:</strong> selecting a method does not charge you or mark payment as received. Confirm payment instructions directly with the business.</p>${paymentNotice}<div class="choice-row">${paymentOptions.map(method => `<label class="choice-card"><input type="radio" name="payment" value="${esc(method)}" ${payment === method ? "checked" : ""}> ${esc(method)}</label>`).join("")}</div>${error("payment")}</div>
-      </div><aside><div class="panel checkout-summary"><h2 style="font-size:25px">Order Summary</h2>${rows.map(({product, quantity, specialInstructions}) => `<div class="summary-line"><span>${esc(product.name)} × ${quantity}${specialInstructions ? `<br><small class="muted">${esc(specialInstructions)}</small>` : ""}</span><strong>${money(product.price * quantity)}</strong></div>`).join("")}<div class="summary-line"><span>Item subtotal</span><strong>${money(subtotal())}</strong></div>${feeLine}<div class="summary-line total"><span>${orderType === "Delivery" && configuredFee === null ? "Final total" : "Estimated total"}</span><strong>${orderType === "Delivery" && configuredFee === null ? "To be confirmed" : money(subtotal() + (configuredFee || 0))}</strong></div><p class="small muted">${esc(feeNote)}</p><p class="checkout-confirmation">Your order will be sent through Facebook Messenger. After Messenger opens, paste your copied order details and press Send. Your order is not confirmed until Eli's Crunch replies to you.</p><button class="button button-outline button-block" type="button" data-action="copy-order-message" ${messengerResult ? "" : "disabled"}>Copy Order Details</button><button class="button button-primary button-block messenger-submit" type="button" data-action="place-order-messenger" ${messengerRequestPending || !paymentOptions.length ? "disabled" : ""}>${messengerRequestPending ? "Preparing Message..." : "Place Order via Messenger"}</button><p class="small muted messenger-url-hint">${config.messengerUrl ? "Messenger destination is configured in this browser." : "Messenger checkout is not configured yet. Ask the owner to add and test the official Messenger URL."}</p></div></aside></div></form>${result}</section>`;
+      </div><aside><div class="panel checkout-summary"><h2 style="font-size:25px">Order Summary</h2>${rows.map(({product, quantity, specialInstructions}) => `<div class="summary-line"><span>${esc(product.name)} × ${quantity}${specialInstructions ? `<br><small class="muted">${esc(specialInstructions)}</small>` : ""}</span><strong>${money(product.price * quantity)}</strong></div>`).join("")}<div class="summary-line"><span>Item subtotal</span><strong>${money(subtotal())}</strong></div>${feeLine}<div class="summary-line total"><span>${orderType === "Delivery" && configuredFee === null ? "Final total" : "Estimated total"}</span><strong>${orderType === "Delivery" && configuredFee === null ? "To be confirmed" : money(subtotal() + (configuredFee || 0))}</strong></div><p class="small muted">${esc(feeNote)}</p><p class="checkout-confirmation">Confirm your details first, then review the generated message before opening Messenger. Nothing is sent until you paste and send it there.</p><button class="button button-primary button-block messenger-submit" type="button" data-action="review-order-details" ${messengerRequestPending || !paymentOptions.length ? "disabled" : ""}>Confirm Order Details</button><p class="small muted messenger-url-hint">${config.messengerUrl ? "Messenger destination is configured in this browser." : "Messenger checkout is not configured yet. Ask the owner to add and test the official Messenger URL."}</p></div></aside></div></form>${result}</section>`;
   }
   function orderItems(order) {
     return (order.items || []).map(item => `<div class="summary-line"><span>${esc(item.name)} × ${item.quantity}${item.specialInstructions ? `<br><small class="muted">Note: ${esc(item.specialInstructions)}</small>` : ""}</span><strong>${money(item.price * item.quantity)}</strong></div>`).join("");
@@ -735,6 +735,27 @@
       message,
       opened,
       status: `${status}${copied ? " The message was copied to your clipboard." : " Clipboard access was unavailable; use Copy Order Details or select and copy the message below."} After Messenger opens, paste the copied order details and press Send. Your order is not confirmed until Eli's Crunch replies to you.`
+    };
+    render();
+    document.getElementById("messenger-result")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function reviewOrderDetails() {
+    const form = document.getElementById("checkout-form");
+    if (!form) return;
+    const data = Object.fromEntries(new FormData(form).entries());
+    checkoutDraft = data;
+    checkoutErrors = validateCheckout(data);
+    if (Object.keys(checkoutErrors).length) {
+      messengerResult = null;
+      render();
+      document.querySelector(".field-error, .alert")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    messengerResult = {
+      message: buildMessengerOrderMessage(data),
+      opened: false,
+      ready: true,
+      status: "Your order details are ready. Review the message below before continuing to Messenger."
     };
     render();
     document.getElementById("messenger-result")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1151,6 +1172,8 @@
       sessionStorage.removeItem(ADMIN_DEMO_SESSION_KEY);
       history.replaceState({}, "", "/admin");
       render();
+    } else if (action === "review-order-details") {
+      reviewOrderDetails();
     } else if (action === "place-order-messenger") {
       void placeOrderViaMessenger(button);
     } else if (action === "copy-order-message") {
