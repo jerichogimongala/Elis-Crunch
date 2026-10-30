@@ -439,6 +439,7 @@
         <strong>Your order is not confirmed until Eli's Crunch replies through Messenger.</strong>
         Please verify your details before sending.
       </div>
+      <p class="messenger-redirect-notice"><strong>Next step:</strong> Clicking below will open the configured Messenger conversation in a new tab and copy your message. Paste it into the conversation and press Send; clicking the button alone does not send your order.</p>
 
       <div class="messenger-message-shell">
         <div class="messenger-message">
@@ -452,7 +453,7 @@
         </div>
       </div>
       <div class="messenger-actions">
-        <button class="button button-primary button-block" type="button" data-action="copy-order-message">Copy Order Details</button>
+        <button class="button button-primary button-block messenger-submit" type="button" data-action="place-order-messenger">Place Order via Messenger</button>
       </div>
       <p class="small muted messenger-note">${messengerResult.opened ? "Messenger was opened in a new tab. Paste the copied message into that conversation and press Send." : "Messenger did not open. Copy the message, then open the official Messenger link after configuring it."}</p>
     </div>` : "";
