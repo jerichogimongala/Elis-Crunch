@@ -6,6 +6,8 @@
     cart: "elisCrunch.cart",
     settings: "elisCrunch.settings",
   };
+  const ADMIN_DEMO_SESSION_KEY = "elisCrunch.adminDemoSession";
+  const ADMIN_DEMO_CODE = "CRUNCH-DEMO";
   const DEFAULT_SETTINGS = {
     businessName: "Eli's Crunch",
     tagline: "Little Chef, Big Smiles",
@@ -883,10 +885,24 @@
     render();
     notify(`Demo order ${id} updated to ${status}.`);
   }
+  function adminLogin() {
+    document.body.classList.remove("has-mobile-cart");
+    app.innerHTML = `<main class="login-wrap"><form id="admin-login-form" class="login-card">
+      <img class="login-logo" src="/images/eli-icon.jpg" alt="Eli's Crunch">
+      <div class="eyebrow">Browser-only demo</div>
+      <h1>Admin sign in</h1>
+      <p class="muted">Enter the demo access code to open the admin preview.</p>
+      <div class="demo-note"><strong>Demo gate only, not security.</strong><br>This static page exposes its code in the browser and can be bypassed.<br><strong>Demo code: ${ADMIN_DEMO_CODE}</strong></div>
+      <div class="field"><label for="admin-demo-code">Demo access code</label><input id="admin-demo-code" name="passcode" type="password" autocomplete="current-password" required></div>
+      <p id="admin-login-error" class="field-error" role="alert" hidden></p>
+      <button class="button button-primary button-block" type="submit">Sign In</button>
+      <a class="button button-outline button-block" href="/" data-link="/">Return to storefront</a>
+    </form></main>`;
+  }
   function adminNav() {
     const current = path();
     const nav = [["/admin/dashboard","Dashboard"],["/admin/menu","Menu Management"],["/admin/settings","Ordering & Checkout Settings"]];
-    return `<aside class="admin-side"><div class="admin-brand"><img src="/images/eli-icon.jpg" alt=""><span>Eli's Crunch<br><small>Admin</small></span></div><div style="margin:0 8px 18px"><span class="demo-tag">BROWSER-ONLY</span></div><nav class="admin-nav">${nav.map(([url,label]) => `<a href="${url}" data-link="${url}" class="${current === url ? "active" : ""}">${label}</a>`).join("")}</nav></aside>`;
+    return `<aside class="admin-side"><div class="admin-brand"><img src="/images/eli-icon.jpg" alt=""><span>Eli's Crunch<br><small>Admin</small></span></div><div style="margin:0 8px 18px"><span class="demo-tag">BROWSER-ONLY</span></div><nav class="admin-nav">${nav.map(([url,label]) => `<a href="${url}" data-link="${url}" class="${current === url ? "active" : ""}">${label}</a>`).join("")}<button type="button" data-action="admin-logout">Sign Out</button></nav></aside>`;
   }
   function adminLayout(content, title) {
     document.body.classList.remove("has-mobile-cart");
@@ -997,6 +1013,10 @@
       <p id="settings-error" class="field-error" role="alert" hidden></p><button class="button button-primary" style="margin-top:20px">Save Ordering Settings</button></form><section class="panel"><div class="eyebrow">Menu and browser data</div><h2 style="font-size:25px">Browser-local limitations</h2><p class="muted">Menu edits and these settings remain in this browser only. The site has no admin authentication, shared database, Messenger inbox, or order tracking. Avoid storing secrets and real customer information.</p><button class="button button-danger" data-action="reset-demo">Reset Local Demo Settings</button></section>`, "Ordering & Checkout Settings");
   }
   function renderAdmin() {
+    if (sessionStorage.getItem(ADMIN_DEMO_SESSION_KEY) !== "granted") {
+      adminLogin();
+      return;
+    }
     const current = path();
     if (current === "/admin" || current === "/admin/") { history.replaceState({}, "", "/admin/dashboard"); adminDashboard(); }
     else if (current === "/admin/orders" || current.startsWith("/admin/orders/")) { history.replaceState({}, "", "/admin/dashboard"); adminDashboard(); }
@@ -1126,7 +1146,11 @@
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const { action, id } = button.dataset;
-    if (action === "place-order-messenger") {
+    if (action === "admin-logout") {
+      sessionStorage.removeItem(ADMIN_DEMO_SESSION_KEY);
+      history.replaceState({}, "", "/admin");
+      render();
+    } else if (action === "place-order-messenger") {
       void placeOrderViaMessenger(button);
     } else if (action === "copy-order-message") {
       if (!messengerResult?.message) { notify("Prepare your checkout message before copying it."); return; }
@@ -1283,7 +1307,19 @@
   });
   document.addEventListener("submit", event => {
     const form = event.target;
-    if (form.id === "checkout-form") {
+    if (form.id === "admin-login-form") {
+      event.preventDefault();
+      const error = document.getElementById("admin-login-error");
+      if (form.elements.passcode.value !== ADMIN_DEMO_CODE) {
+        error.textContent = "That demo access code is not correct.";
+        error.hidden = false;
+        form.elements.passcode.select();
+        return;
+      }
+      sessionStorage.setItem(ADMIN_DEMO_SESSION_KEY, "granted");
+      history.replaceState({}, "", "/admin/dashboard");
+      render();
+    } else if (form.id === "checkout-form") {
       event.preventDefault();
     } else if (form.getAttribute("id") === "product-form") {
       event.preventDefault();
